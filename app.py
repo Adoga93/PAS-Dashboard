@@ -57,11 +57,37 @@ if tab == "Student Tab":
             color = 'green' if val == 'Paid' else 'red' if val == 'Overdue' else 'orange'
             return f'color: {color}'
 
+        # Prepare dataframe for display (Add links)
+        df_display = df_students.copy()
+        
+        if "Email" in df_display.columns:
+            df_display["Email_Link"] = "mailto:" + df_display["Email"].astype(str)
+        if "Phone" in df_display.columns:
+            df_display["Phone_Link"] = "tel:" + df_display["Phone"].astype(str)
+
+        # Configure columns
+        column_config = {
+            "Email_Link": st.column_config.LinkColumn("Email", display_text=r"mailto:(.*)"),
+            "Phone_Link": st.column_config.LinkColumn("Phone", display_text=r"tel:(.*)"),
+            "Email": None, # Hide original
+            "Phone": None  # Hide original
+        }
+
         # Apply style if column exists
         if "Payment Status" in df_students.columns:
-            st.dataframe(df_students.style.applymap(highlight_status, subset=['Payment Status']), use_container_width=True)
+            st.dataframe(
+                df_display.style.applymap(highlight_status, subset=['Payment Status']),
+                use_container_width=True,
+                hide_index=True,
+                column_config=column_config
+            )
         else:
-            st.dataframe(df_students, use_container_width=True)
+            st.dataframe(
+                df_display,
+                use_container_width=True,
+                hide_index=True,
+                column_config=column_config
+            )
     else:
         st.info("No student data available yet.")
 
@@ -112,57 +138,133 @@ elif tab == "Registration":
     
     if reg_type == "Register Student":
         st.subheader("New Student Registration")
-        with st.form("student_reg_form"):
-            name = st.text_input("Full Name")
-            email = st.text_input("Email")
-            phone = st.text_input("Phone Number")
-            class_times = st.text_input("Preferred Class Times")
-            subjects = st.text_input("Subjects")
+        
+        # Initialize session state for subject rows
+        if "reg_subject_rows" not in st.session_state:
+            st.session_state.reg_subject_rows = 1
+
+        name = st.text_input("Full Name")
+        email = st.text_input("Email")
+        phone = st.text_input("Phone Number")
+        
+        st.markdown("### Subjects & Class Times")
+        
+        subject_options = ["Maths", "English", "Physics", "Chemistry", "Biology", "Science", "History", "Geography", "Other"]
+        day_options = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        
+        all_subjects_data = []
+        
+        for i in range(st.session_state.reg_subject_rows):
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                sub = st.selectbox(f"Subject {i+1}", subject_options, key=f"sub_{i}")
+            with col2:
+                day = st.selectbox(f"Day {i+1}", day_options, key=f"day_{i}")
+            with col3:
+                time = st.time_input(f"Time {i+1}", key=f"time_{i}")
             
-            submitted = st.form_submit_button("Register Student")
-            
-            if submitted:
-                if name:
-                    student_data = {
-                        "Name": name,
-                        "Email": email,
-                        "Phone": phone,
-                        "Class Times": class_times,
-                        "Subjects": subjects
-                    }
-                    if utils.add_student(client, student_data):
-                        st.success(f"✅ Student {name} registered successfully!")
-                    else:
-                        st.error("❌ Failed to register student.")
+            all_subjects_data.append({"Subject": sub, "Day": day, "Time": time})
+
+        def add_subject_row():
+            st.session_state.reg_subject_rows += 1
+        
+        st.button("+ Add Another Subject", on_click=add_subject_row)
+        
+        st.markdown("---")
+        
+        if st.button("Register Student"):
+            if name:
+                # Format strings
+                subject_list = [entry['Subject'] for entry in all_subjects_data]
+                subjects_str = ", ".join(subject_list)
+                
+                class_times_parts = []
+                for entry in all_subjects_data:
+                    t_str = entry['Time'].strftime("%I:%M %p")
+                    class_times_parts.append(f"{entry['Subject']} ({entry['Day'][:3]} {t_str})")
+                
+                class_times_str = ", ".join(class_times_parts)
+                
+                student_data = {
+                    "Name": name,
+                    "Email": email,
+                    "Phone": phone,
+                    "Class Times": class_times_str,
+                    "Subjects": subjects_str
+                }
+                
+                if utils.add_student(client, student_data):
+                    st.success(f"✅ Student {name} registered successfully!")
                 else:
-                    st.warning("Name is required.")
+                    st.error("❌ Failed to register student.")
+            else:
+                st.warning("Name is required.")
 
     elif reg_type == "Register Teacher":
         st.subheader("New Teacher Registration")
-        with st.form("teacher_reg_form"):
-            name = st.text_input("Full Name")
-            email = st.text_input("Email")
-            phone = st.text_input("Phone Number")
-            expertise = st.text_input("Expertise (e.g. Math, Physics)")
-            assigned_students = st.text_input("Assigned Students")
+        
+        name = st.text_input("Full Name")
+        email = st.text_input("Email")
+        phone = st.text_input("Phone Number")
+        expertise = st.text_input("Expertise (e.g. Math, Physics)")
+        
+        # Fetch student list for dropdown
+        df_students_reg = utils.get_students_data(client)
+        student_options = df_students_reg["Student Name"].tolist() if not df_students_reg.empty else []
+        
+        assigned_students_list = st.multiselect("Assigned Students", student_options)
+        assigned_students = ", ".join(assigned_students_list)
+        
+        st.markdown("### Availability")
+        st.markdown("Select days and times you are available.")
+        
+        days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        availability_data = {}
+        
+        for day in days_of_week:
+            col1, col2, col3 = st.columns([1, 2, 2])
+            with col1:
+                is_checked = st.checkbox(day)
             
-            submitted = st.form_submit_button("Register Teacher")
+            if is_checked:
+                with col2:
+                    start_time = st.time_input(f"Start Time ({day})", key=f"start_{day}")
+                with col3:
+                    end_time = st.time_input(f"End Time ({day})", key=f"end_{day}")
+                
+                # Format: "Day (Start - End)"
+                t_start = start_time.strftime("%I:%M %p")
+                t_end = end_time.strftime("%I:%M %p")
+                availability_data[day] = f"{t_start} - {t_end}"
+        
+        st.markdown("---")
+        
+        if st.button("Register Teacher"):
+            if name:
+                # Format availability string
+                # e.g. "Monday (09:00 AM - 05:00 PM), Tuesday (...)"
+                avail_parts = []
+                for day in days_of_week: # Maintain order
+                    if day in availability_data:
+                        avail_parts.append(f"{day} ({availability_data[day]})")
+                
+                availability_str = ", ".join(avail_parts) if avail_parts else "Not Specified"
             
-            if submitted:
-                if name:
-                    teacher_data = {
-                        "Name": name,
-                        "Email": email,
-                        "Phone": phone,
-                        "Expertise": expertise,
-                        "Assigned Students": assigned_students
-                    }
-                    if utils.add_teacher(client, teacher_data):
-                        st.success(f"✅ Teacher {name} registered successfully!")
-                    else:
-                        st.error("❌ Failed to register teacher.")
+                teacher_data = {
+                    "Name": name,
+                    "Email": email,
+                    "Phone": phone,
+                    "Expertise": expertise,
+                    "Assigned Students": assigned_students,
+                    "Availability": availability_str
+                }
+                
+                if utils.add_teacher(client, teacher_data):
+                    st.success(f"✅ Teacher {name} registered successfully!")
                 else:
-                    st.warning("Name is required.")
+                    st.error("❌ Failed to register teacher.")
+            else:
+                st.warning("Name is required.")
 
 # --- ADMIN DASHBOARD ---
 elif tab == "Admin Dashboard":

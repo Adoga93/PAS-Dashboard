@@ -90,14 +90,14 @@ def add_student(client, student_data):
             worksheet = sheet.worksheet("Students")
             row = [
                 student_data.get("Name"),
-                "Pending",  # Payment Status Default
-                "0",        # Academic Progress
-                "0%",       # Attendance
-                "",         # Last Class Date
                 student_data.get("Email"),
                 student_data.get("Phone"),
                 student_data.get("Class Times"),
-                student_data.get("Subjects")
+                student_data.get("Subjects"),
+                "Pending",  # Payment Status Default
+                "0",        # Academic Progress
+                "0%",       # Attendance
+                ""          # Last Class Date
             ]
             worksheet.append_row(row)
             return True
@@ -122,7 +122,8 @@ def add_teacher(client, teacher_data):
                 teacher_data.get("Email"),
                 teacher_data.get("Phone"),
                 teacher_data.get("Expertise"),
-                teacher_data.get("Assigned Students")
+                teacher_data.get("Assigned Students"),
+                teacher_data.get("Availability")
             ]
             worksheet.append_row(row)
             return True
