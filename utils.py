@@ -3,51 +3,77 @@ from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import streamlit as st
 import datetime
+import json
 
-def get_google_sheet_client(credentials_file="credentials.json"):
+# Extracted from your screenshot
+SHEET_ID = "18Cs5gzcBCfG5tFETyOgNcqU4bi8W-8g44PvD3NYkMaI"
+
+def get_google_sheet_client():
     """
-    Connects to Google Sheets using a service account credentials file.
-    Returns None if credentials file is not found (for mock mode).
+    Connects to Google Sheets using st.secrets (cloud) or credentials.json (local).
     """
     try:
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        creds = ServiceAccountCredentials.from_json_keyfile_name(credentials_file, scope)
+        
+        creds = None
+        # 1. Try Streamlit Secrets (for Cloud Deployment)
+        try:
+            if "gcp_service_account" in st.secrets:
+                creds_dict = dict(st.secrets["gcp_service_account"])
+                creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        except Exception:
+            # Secrets not found (normal for local dev), fallback to file
+            pass
+
+        # 2. Try Local File (for Local Development) if secrets didn't work
+        if not creds:
+            creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+            
         client = gspread.authorize(creds)
         return client
     except Exception as e:
+        # Only show sensitive error info if we confirm it's safe or simplified
+        print(f"Auth Error: {e}")
+        return None
+
+def get_sheet_by_id(client):
+    """Helper to open the sheet by ID, which is more robust than name."""
+    try:
+        if not client: return None
+        return client.open_by_key(SHEET_ID)
+    except Exception as e:
+        st.error(f"Connection Error: {e}")
         return None
 
 def get_students_data(client):
     """
     Fetches student data. Returns a DataFrame.
-    If client is None, returns mock data.
     """
-    if client:
+    sheet = get_sheet_by_id(client)
+    if sheet:
         try:
-            sheet = client.open("PAS Tutors Database")
             worksheet = sheet.worksheet("Students")
             data = worksheet.get_all_records()
             return pd.DataFrame(data)
-        except Exception:
-            st.error("Could not fetch data from Google Sheets. Check your sheet name and permissions.")
-            return pd.DataFrame() # Return empty to avoid crashes
+        except Exception as e:
+            st.error(f"Error reading 'Students' tab: {e}")
+            return pd.DataFrame() 
     else:
-        # Mock Data
-        return pd.DataFrame({
-            "Student Name": ["Alice Johnson", "Bob Smith", "Charlie Brown", "Diana Prince"],
-            "Payment Status": ["Paid", "Pending", "Overdue", "Paid"],
-            "Academic Progress": [75, 40, 10, 95],
-            "Attendance": ["90%", "60%", "20%", "100%"]
-        })
+        # Mock Data (only if client/sheet failed entirely)
+        if not client:
+             st.warning("Using Mock Data (Not connected)")
+             return pd.DataFrame({
+                "Student Name": ["Alice Johnson", "Bob Smith", "Charlie Brown", "Diana Prince"],
+                "Payment Status": ["Paid", "Pending", "Overdue", "Paid"],
+                "Academic Progress": [75, 40, 10, 95],
+                "Attendance": ["90%", "60%", "20%", "100%"]
+            })
+        return pd.DataFrame()
 
 def add_review(client, teacher_name, student_name, review_text):
-    """
-    Appends a review to the 'Reviews' worksheet.
-    Returns True if successful, False otherwise.
-    """
-    if client:
+    sheet = get_sheet_by_id(client)
+    if sheet:
         try:
-            sheet = client.open("PAS Tutors Data")
             worksheet = sheet.worksheet("Reviews")
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             worksheet.append_row([timestamp, teacher_name, student_name, review_text])
@@ -55,33 +81,19 @@ def add_review(client, teacher_name, student_name, review_text):
         except Exception as e:
             st.error(f"Error saving review: {e}")
             return False
-    else:
-        # Mock success
-        return True
+    return True # Mock success if no client
 
 def add_student(client, student_data):
-    """
-    Appends a new student to the 'Students' worksheet.
-    student_data is a dict containing: Name, Email, Phone, Class Times, Subjects.
-    Defaults added: Payment Status='Pending', Academic Progress='0'.
-    """
-    if client:
+    sheet = get_sheet_by_id(client)
+    if sheet:
         try:
-            sheet = client.open("PAS Tutors Database")
             worksheet = sheet.worksheet("Students")
-            # Expected columns: Student Name, Payment Status, Academic Progress, Attendance, Last Class Date, Email, Phone, Class Times, Subjects
-            # We will append in a generic way, but let's try to match the structure if we can. 
-            # For now, let's just append the fields we have in a logical order, assuming the sheet will be set up to match or we just append rows.
-            # Based on previous structure: Student Name, Payment Status, Academic Progress, Attendance, Last Class Date
-            # New fields needed: Email, Phone, Class Times, Subjects.
-            # Let's assume the user adds these columns to the sheet.
-            
             row = [
                 student_data.get("Name"),
                 "Pending",  # Payment Status Default
-                "0",        # Academic Progress Default (as string or int)
-                "0%",       # Attendance Default (initial)
-                "",         # Last Class Date (empty)
+                "0",        # Academic Progress
+                "0%",       # Attendance
+                "",         # Last Class Date
                 student_data.get("Email"),
                 student_data.get("Phone"),
                 student_data.get("Class Times"),
@@ -92,23 +104,17 @@ def add_student(client, student_data):
         except Exception as e:
             st.error(f"Error saving student: {e}")
             return False
-    else:
-        # Mock Mode
-        return True
+    return True
 
 def add_teacher(client, teacher_data):
-    """
-    Appends a new teacher to the 'Teachers' worksheet.
-    teacher_data is a dict containing: Name, Email, Phone, Expertise, Assigned Students.
-    """
-    if client:
+    sheet = get_sheet_by_id(client)
+    if sheet:
         try:
-            sheet = client.open("PAS Tutors Database")
-            # check if Teachers tab exists, if not maybe warn? But usually we assume it exists.
+            # check if Teachers tab exists
             try:
                 worksheet = sheet.worksheet("Teachers")
             except gspread.exceptions.WorksheetNotFound:
-                 st.error("Traceback: 'Teachers' worksheet not found. Please create it.")
+                 st.error("'Teachers' worksheet not found in the Google Sheet.")
                  return False
 
             row = [
@@ -123,6 +129,5 @@ def add_teacher(client, teacher_data):
         except Exception as e:
              st.error(f"Error saving teacher: {e}")
              return False
-    else:
-        # Mock Mode
-        return True
+    return True
+
