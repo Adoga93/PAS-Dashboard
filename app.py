@@ -149,7 +149,12 @@ elif tab == "Registration":
         
         st.markdown("### Subjects & Class Times")
         
-        subject_options = ["Maths", "English", "Physics", "Chemistry", "Biology", "Science", "History", "Geography", "Other"]
+        subject_options = [
+            "Maths", "English", "Physics", "Chemistry", "Biology", "Science", "History", "Geography",
+            "Literacy", "Reading", "Creative writing", "Spelling", "Verbal reasoning", "Quantitative reasoning",
+            "Phonics", "Social Studies", "Art", "Music", "Computer Science",
+            "Other"
+        ]
         day_options = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
         
         all_subjects_data = []
@@ -206,7 +211,15 @@ elif tab == "Registration":
         name = st.text_input("Full Name")
         email = st.text_input("Email")
         phone = st.text_input("Phone Number")
-        expertise = st.text_input("Expertise (e.g. Math, Physics)")
+        # Use the same subject options for expertise, or a similar list
+        subject_options = [
+            "Maths", "English", "Physics", "Chemistry", "Biology", "Science", "History", "Geography",
+            "Literacy", "Reading", "Creative writing", "Spelling", "Verbal reasoning", "Quantitative reasoning",
+            "Phonics", "Social Studies", "Art", "Music", "Computer Science",
+            "Other"
+        ]
+        expertise_list = st.multiselect("Expertise (Subjects)", subject_options)
+        expertise = ", ".join(expertise_list)
         
         # Fetch student list for dropdown
         df_students_reg = utils.get_students_data(client)
