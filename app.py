@@ -30,11 +30,23 @@ if tab == "Student Tab":
         if search_query:
             df_students = df_students[df_students["Student Name"].str.contains(search_query, case=False, na=False)]
 
+        # Normalize Payment Status (Case-insensitive + Strip Whitespace)
+        if "Payment Status" in df_students.columns:
+            df_students["Payment Status"] = (
+                df_students["Payment Status"]
+                .astype(str)
+                .str.strip()
+                .str.title()  # Converts 'paid' -> 'Paid', 'PAID' -> 'Paid'
+            )
+
         # Display Metrics
         col1, col2, col3 = st.columns(3)
         col1.metric("Total Students", len(df_students))
+        
+        # Count based on normalized values
         paid_count = len(df_students[df_students["Payment Status"] == "Paid"])
         col2.metric("Paid", paid_count)
+        
         pending_count = len(df_students[df_students["Payment Status"] == "Pending"])
         col3.metric("Pending", pending_count)
 
