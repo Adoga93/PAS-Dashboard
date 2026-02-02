@@ -418,6 +418,62 @@ elif tab == "Registration":
 elif tab == "Admin Dashboard":
     st.header("📊 Admin Dashboard")
     
+    # --- MASTER SCHEDULE PREVIEW ---
+    st.subheader("📅 Master Class Schedule")
+    
+    # Date/Day Selector
+    days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    today_str = datetime.datetime.now().strftime("%A")
+    # Default to today if valid, else Monday
+    default_idx = days_of_week.index(today_str) if today_str in days_of_week else 0
+    
+    col_day, col_empty = st.columns([1, 2])
+    with col_day:
+        selected_day_view = st.selectbox("Select Day", days_of_week, index=default_idx)
+    
+    # Fetch Teachers to build schedule
+    df_teachers_sched = utils.get_teacher_data(client)
+    
+    daily_agenda = []
+    
+    if not df_teachers_sched.empty:
+        for idx, t_row in df_teachers_sched.iterrows():
+            t_name = t_row.get("Teacher Name", "Unknown")
+            t_sched_str = t_row.get("Class Schedule", "")
+            t_expertise = t_row.get("Subject Expertise", "")
+            t_students = t_row.get("Assigned Students", "")
+            
+            # Parse
+            parsed = utils.parse_schedule_string(t_sched_str)
+            
+            if selected_day_view in parsed:
+                start_t, end_t = parsed[selected_day_view]
+                # Convert to string for display, but keep object for sorting if needed? 
+                # Let's just store sortable string or obj
+                
+                daily_agenda.append({
+                    "Time": f"{start_t.strftime('%I:%M %p')} - {end_t.strftime('%I:%M %p')}",
+                    "Teacher": t_name,
+                    "Subject/Expertise": t_expertise,
+                    "Assigned Students": t_students,
+                    "_sort_key": start_t # Hidden key for sorting
+                })
+    
+    if daily_agenda:
+        # Sort by start time
+        daily_agenda.sort(key=lambda x: x["_sort_key"])
+        
+        # Remove sort key before display
+        for item in daily_agenda:
+            del item["_sort_key"]
+            
+        df_agenda = pd.DataFrame(daily_agenda)
+        st.dataframe(df_agenda, use_container_width=True, hide_index=True)
+    else:
+        st.info(f"No recurring classes scheduled for {selected_day_view}.")
+        
+    st.markdown("---")
+
     df_students = utils.get_students_data(client)
     
     if not df_students.empty:

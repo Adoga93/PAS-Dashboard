@@ -423,13 +423,20 @@ from email.mime.multipart import MIMEMultipart
 
 # Email Configuration
 # Try to get from secrets, else use provided fallback
-SENDER_EMAIL = st.secrets.get("EMAIL_USER", "Pinnacleassistance1@gmail.com")
-SENDER_PASSWORD = st.secrets.get("EMAIL_PASSWORD", "Lanadel040924") 
-
-# App URL (Critical for Magic Links)
-# In production, this must be set in secrets to the actual URL (e.g., "https://pas-tutors.streamlit.app")
-# User provided: https://pas-dashboard-gcvkbpip4geh7cchnpgqya.streamlit.app/
-BASE_APP_URL = st.secrets.get("APP_URL", "https://pas-dashboard-gcvkbpip4geh7cchnpgqya.streamlit.app")
+try:
+    SENDER_EMAIL = st.secrets.get("EMAIL_USER", "Pinnacleassistance1@gmail.com")
+    SENDER_PASSWORD = st.secrets.get("EMAIL_PASSWORD", "Lanadel040924") 
+    BASE_APP_URL = st.secrets.get("APP_URL", "https://pas-dashboard-gcvkbpip4geh7cchnpgqya.streamlit.app")
+except FileNotFoundError:
+    # If no secrets.toml exists (local dev), use defaults
+    SENDER_EMAIL = "Pinnacleassistance1@gmail.com"
+    SENDER_PASSWORD = "Lanadel040924"
+    BASE_APP_URL = "http://localhost:8501" # Default to localhost if no secrets
+except Exception:
+    # Catch StreamlitSecretNotFoundError (which might be ImportError or other)
+    SENDER_EMAIL = "Pinnacleassistance1@gmail.com"
+    SENDER_PASSWORD = "Lanadel040924"
+    BASE_APP_URL = "http://localhost:8501"
 
 def send_email_invite(teacher_email, student_email, subject, time_str, session_id, meeting_link):
     """
