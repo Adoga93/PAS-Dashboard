@@ -89,6 +89,10 @@ def get_google_sheet_client():
         print(f"Auth Error: {e}")
         return None
 
+# Cache the client connection to avoid re-auth on every run
+# Resource caching is for connections/objects
+get_google_sheet_client = st.cache_resource(get_google_sheet_client)
+
 def get_sheet_by_id(client):
     """Helper to open the sheet by ID, which is more robust than name."""
     try:
@@ -98,11 +102,13 @@ def get_sheet_by_id(client):
         st.error(f"Connection Error: {e}")
         return None
 
-def get_students_data(client):
+@st.cache_data(ttl=300) # Cache for 5 minutes
+def get_students_data(_client):
     """
     Fetches student data. Returns a DataFrame.
+    Prefix _client to prevent hashing the client object which might fail or be slow.
     """
-    sheet = get_sheet_by_id(client)
+    sheet = get_sheet_by_id(_client)
     if sheet:
         try:
             worksheet = sheet.worksheet("Students")
@@ -113,7 +119,7 @@ def get_students_data(client):
             return pd.DataFrame() 
     else:
         # Mock Data (only if client/sheet failed entirely)
-        if not client:
+        if not _client:
              st.warning("Using Mock Data (Not connected)")
              return pd.DataFrame({
                 "Student Name": ["Alice Johnson", "Bob Smith", "Charlie Brown", "Diana Prince"],
@@ -130,17 +136,27 @@ def add_review(client, teacher_name, student_name, review_text):
             worksheet = sheet.worksheet("Reviews")
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             worksheet.append_row([timestamp, teacher_name, student_name, review_text])
+            # Clear cache because data changed
+            get_students_data.clear() # Indirectly might affect if we use it? No, but Reviews changed.
+            # We don't have a get_reviews_data function yet, but calculate_teacher_pay uses it.
+            # So we should clear any cache that relies on reviews.
+            # Since we don't cache calculate_teacher_pay directly (it takes args), we rely on it calling helpers.
+            # But wait, calculate_teacher_pay calls get_billing_data which IS cached. 
+            # And it calls get_sheet_by_id. 
+            # It calls ws_reviews.get_all_values(). This is RAW gspread call. Not cached.
+            # So calculate_teacher_pay is fine.
             return True
         except Exception as e:
             st.error(f"Error saving review: {e}")
             return False
     return True # Mock success if no client
 
-def get_billing_data(client):
+@st.cache_data(ttl=300)
+def get_billing_data(_client):
     """
     Fetches billing data. Returns a DataFrame.
     """
-    sheet = get_sheet_by_id(client)
+    sheet = get_sheet_by_id(_client)
     if sheet:
         try:
             worksheet = sheet.worksheet("Billing")
@@ -195,6 +211,10 @@ def add_student(client, student_data, billing_data=None):
         except Exception as e:
             st.error(f"Error saving student: {e}")
             return False
+            
+    # Clear caches
+    get_students_data.clear()
+    get_billing_data.clear()
     return True
 
 def calculate_billing(client):
@@ -271,6 +291,9 @@ def update_billing_profile(client, student_name, billing_data, recalculate=False
             return True, f"Billing updated for {student_name}."
         except Exception as e:
             return False, str(e)
+            
+    # Clear caches
+    get_billing_data.clear()
     return False, "No Sheet"
 
 def get_all_student_balances(client):
@@ -384,14 +407,17 @@ def add_teacher(client, teacher_data):
                 teacher_data.get("Availability") # Mapped to Class Schedule
             ]
             worksheet.append_row(row)
+            # Clear caches
+            get_teacher_data.clear()
             return True
         except Exception as e:
              st.error(f"Error saving teacher: {e}")
              return False
     return True
 
-def get_teacher_data(client):
-    sheet = get_sheet_by_id(client)
+@st.cache_data(ttl=300)
+def get_teacher_data(_client):
+    sheet = get_sheet_by_id(_client)
     if sheet:
         try:
              worksheet = sheet.worksheet("Teachers")
@@ -824,8 +850,9 @@ def send_email_invite(teacher_email, student_email, subject, time_str, session_i
         print(f"Email Error: {e}")
         return False, str(e)
 
-def get_sessions_data(client):
-    sheet = get_sheet_by_id(client)
+@st.cache_data(ttl=300)
+def get_sessions_data(_client):
+    sheet = get_sheet_by_id(_client)
     if sheet:
         try:
             # Check for worksheet existence explicitly
@@ -887,8 +914,10 @@ def schedule_class(client, teacher_name, student_name, subject, time_str, meetin
             email_success, email_msg = send_email_invite(t_email, s_email, subject, time_str, session_id, meeting_link)
             
             if email_success:
+                get_sessions_data.clear()
                 return True, "Invites Sent Successfully!", session_id
             else:
+                get_sessions_data.clear()
                 return True, f"Class Scheduled but Email Failed: {email_msg}", session_id
             
         except Exception as e:
@@ -926,6 +955,7 @@ def clock_in_by_id(client, session_id, role):
                 # Update Status to In-Progress (Session Active)
                 ws.update_cell(row, 7, "In-Progress")
 
+                get_sessions_data.clear()
                 return True, "Clocked In Successfully!", meeting_link
             else:
                 return False, "Session Not Found", ""
@@ -969,6 +999,7 @@ def clock_in(client, code, user_name, role):
                         # Columns: 
                         # 1:ID, 2:T, 3:S, 4:Sub, 5:Time, 6:Link, 7:Status, 8:Code, 9:T_Join, 10:S_Join
                         
+                        get_sessions_data.clear()
                         return True, f"Clock-in Successful for {role}!"
                     else:
                         return False, "Class already completed or cancelled."
@@ -1041,6 +1072,10 @@ def update_student(client, original_name, updated_data):
                     except:
                         pass # Fail silently on billing sync if complex
                 
+                # Clear relevant caches
+                get_students_data.clear()
+                get_billing_data.clear()
+                
                 return True, "Student updated successfully!"
             else:
                 return False, "Student not found."
@@ -1072,6 +1107,10 @@ def update_teacher(client, original_name, updated_data):
                 ]
                 
                 ws.update(f"A{r}:F{r}", [updates])
+                
+                # Clear relevant caches
+                get_teacher_data.clear()
+                
                 return True, "Teacher updated successfully!"
             else:
                 return False, "Teacher not found."
