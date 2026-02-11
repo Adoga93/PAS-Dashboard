@@ -93,16 +93,49 @@ def get_google_sheet_client():
 # Resource caching is for connections/objects
 get_google_sheet_client = st.cache_resource(get_google_sheet_client)
 
-def get_sheet_by_id(client):
-    """Helper to open the sheet by ID, which is more robust than name."""
+import time
+from func_timeout import func_timeout, FunctionTimedOut
+
+def retry_on_quota(func):
+    """
+    Decorator to retry API calls on Quota Exceeded error.
+    """
+    def wrapper(*args, **kwargs):
+        retries = 3
+        delay = 2
+        for i in range(retries):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                err_str = str(e).lower()
+                if "429" in err_str or "quota" in err_str:
+                    if i < retries - 1:
+                        time.sleep(delay)
+                        delay *= 2 # Exponential backoff
+                        continue
+                raise e
+        return func(*args, **kwargs)
+    return wrapper
+
+@st.cache_resource(ttl=600)
+def get_sheet_by_id(_client):
+    """
+    Helper to open the sheet by ID. 
+    Cached to prevent repeatedly fetching spreadsheet metadata.
+    """
     try:
-        if not client: return None
-        return client.open_by_key(SHEET_ID)
+        if not _client: return None
+        return _client.open_by_key(SHEET_ID)
     except Exception as e:
-        st.error(f"Connection Error: {e}")
+        err_str = str(e).lower()
+        if "429" in err_str or "quota" in err_str:
+             st.error("⚠️ Google API Quota Exceeded. Please wait a moment and refresh.")
+        else:
+             st.error(f"Connection Error: {e}")
         return None
 
-@st.cache_data(ttl=300) # Cache for 5 minutes
+@st.cache_data(ttl=600) # Cache for 10 minutes
+@retry_on_quota
 def get_students_data(_client):
     """
     Fetches student data. Returns a DataFrame.
@@ -151,7 +184,8 @@ def add_review(client, teacher_name, student_name, review_text):
             return False
     return True # Mock success if no client
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600) # Increased TTL to 10 mins
+@retry_on_quota
 def get_billing_data(_client):
     """
     Fetches billing data. Returns a DataFrame.
@@ -415,7 +449,8 @@ def add_teacher(client, teacher_data):
              return False
     return True
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600)
+@retry_on_quota
 def get_teacher_data(_client):
     sheet = get_sheet_by_id(_client)
     if sheet:
