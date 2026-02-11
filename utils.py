@@ -4,9 +4,62 @@ import pandas as pd
 import streamlit as st
 import datetime
 import json
+import re
 
 # Extracted from your screenshot
 SHEET_ID = "18Cs5gzcBCfG5tFETyOgNcqU4bi8W-8g44PvD3NYkMaI"
+
+def clean_currency(val):
+    """
+    Parses currency string to float.
+    Examples: "55,000", "NGN 55000", "$100.00", " 500 ", ""
+    """
+    if pd.isna(val): return 0.0
+    s = str(val).strip()
+    if not s: return 0.0
+    
+    # Remove NGN, $, commas, spaces
+    s_clean = re.sub(r'[^\d.]', '', s)
+    
+    try:
+        return float(s_clean)
+    except ValueError:
+        return 0.0
+
+def clean_billing_data(df):
+    """
+    Normalizes billing dataframe.
+    """
+    if df.empty: return df
+    
+    # 1. Normalize Column Names (Strip whitespace)
+    df.columns = [c.strip() for c in df.columns]
+    
+    # 2. Normalize 'Billing Type' (lowercase)
+    if "Billing Type" in df.columns:
+        df["Billing Type"] = df["Billing Type"].astype(str).str.lower().str.strip()
+    
+    # 3. Clean 'Rate' or 'Rate/Amount' (Currency)
+    # Check for likely rate columns
+    rate_col = None
+    if "Rate" in df.columns: rate_col = "Rate"
+    elif "Rate/Amount" in df.columns: rate_col = "Rate/Amount"
+    
+    if rate_col:
+        # Create a new clean column 'Rate_Clean' but also update original? 
+        # Update original to be numeric for app usage
+        # But wait, app might expect to show string? 
+        # Better to keep 'Rate' numeric for calculations.
+        
+        # Rename "Rate/Amount" to "Rate" for consistency if needed?
+        if rate_col == "Rate/Amount":
+            df.rename(columns={"Rate/Amount": "Rate"}, inplace=True)
+            rate_col = "Rate"
+            
+        df[rate_col] = df[rate_col].apply(clean_currency)
+        
+    return df
+
 
 def get_google_sheet_client():
     """
@@ -92,7 +145,8 @@ def get_billing_data(client):
         try:
             worksheet = sheet.worksheet("Billing")
             data = worksheet.get_all_records()
-            return pd.DataFrame(data)
+            df = pd.DataFrame(data)
+            return clean_billing_data(df)
         except Exception as e:
             st.error(f"Error reading 'Billing' tab: {e}")
             return pd.DataFrame()
@@ -132,7 +186,7 @@ def add_student(client, student_data, billing_data=None):
                     billing_data.get("Rate"),
                     billing_data.get("Currency"),
                     billing_data.get("Payment Terms"),
-                    0,  # Current Balance (Starts at 0)
+                    ""  # Current Balance (Starts empty, calculated dynamically)
                     ""  # Last Bill Date
                 ]
                 ws_billing.append_row(row_billing)
@@ -184,30 +238,22 @@ def update_billing_profile(client, student_name, billing_data, recalculate=False
             except gspread.exceptions.CellNotFound:
                 pass
             
-            balance = 0
-            if recalculate:
-                # Calculate based on history
-                balance = calculate_historical_balance(client, student_name, billing_data.get("Rate"), billing_data.get("Billing Type"))
+            # We NO LONGER calculate or write the balance to the sheet.
+            # The 'Current Balance' column (index 6, Col F) will be left as is or blanked if we want.
+            # Let's keep it as "" (empty string) to avoid confusion.
+            balance_display = "" 
 
             if cell:
                 # Update existing row
                 row_num = cell.row
                 # Update cols 2, 3, 4, 5, 6 (Billing Type, Rate, Currency, Terms, Balance)
-                # Note: This is a bit manual, using update_cell or update.
-                # Only update balance if recalculate is True, otherwise keep existing? 
-                # For simplicity, if Recalculate is False, we keep existing balance.
                 
-                if not recalculate:
-                     # Fetch existing balance
-                     existing_balance = ws_billing.cell(row_num, 6).value
-                     balance = existing_balance
-
                 ws_billing.update(f"B{row_num}:F{row_num}", [[
                     billing_data.get("Billing Type"),
                      billing_data.get("Rate"),
                      billing_data.get("Currency"),
                      billing_data.get("Payment Terms"),
-                     balance
+                     balance_display # Now empty
                 ]])
             else:
                 # Append new
@@ -217,15 +263,78 @@ def update_billing_profile(client, student_name, billing_data, recalculate=False
                     billing_data.get("Rate"),
                     billing_data.get("Currency"),
                     billing_data.get("Payment Terms"),
-                    balance,
+                    balance_display, # Now empty
                     ""
                 ]
                 ws_billing.append_row(row_billing)
             
-            return True, f"Billing updated. Balance: {balance}"
+            return True, f"Billing updated for {student_name}."
         except Exception as e:
             return False, str(e)
     return False, "No Sheet"
+
+def get_all_student_balances(client):
+    """
+    Calculates current balance for ALL students dynamically.
+    Returns DataFrame: [Student Name, Billing Type, Rate, Currency, Classes Count, Total Owed]
+    """
+    try:
+        # 1. Get Billing Data
+        df_billing = get_billing_data(client)
+        if df_billing.empty:
+            return pd.DataFrame()
+            
+        # 2. Get Reviews (for class counting)
+        sheet = get_sheet_by_id(client)
+        if not sheet: return pd.DataFrame()
+        
+        ws_reviews = sheet.worksheet("Reviews")
+        # Review structure: Timestamp, Teacher Name, Student Name, Review
+        # Student Name is Column C (index 3)
+        # Fetch all student names from reviews to count
+        all_reviews_students = ws_reviews.col_values(3) # List of student names
+        
+        results = []
+        
+        for _, row in df_billing.iterrows():
+            s_name = row.get("Student Name", "").strip()
+            if not s_name: continue
+            
+            b_type = row.get("Billing Type", "").lower()
+            rate = row.get("Rate", 0.0)
+            currency = row.get("Currency", "NGN")
+            
+            # Calculate Count
+            count = all_reviews_students.count(s_name)
+            
+            total_owed = 0.0
+            if b_type == "per class":
+                total_owed = count * rate
+            elif b_type == "per hour":
+                # Assuming 1 hr = 1 class for now
+                total_owed = count * rate
+            elif b_type == "monthly fixed":
+                # Logic for monthly is trickier without dates. 
+                # For now, let's just show rate? Or 0 if handled elsewhere?
+                # User asked for "Personal inputs doesn't display results"
+                # Let's assume Monthly means they owe the Rate once per month?
+                # For simple dashboard, let's just show the Rate as the "Monthly Dues"
+                total_owed = rate 
+            
+            results.append({
+                "Student Name": s_name,
+                "Billing Type": b_type.title(),
+                "Rate": rate,
+                "Currency": currency,
+                "Classes Count": count,
+                "Total Owed": total_owed
+            })
+            
+        return pd.DataFrame(results)
+
+    except Exception as e:
+        print(f"Error calculating all balances: {e}")
+        return pd.DataFrame()
 
 def calculate_historical_balance(client, student_name, rate, billing_type):
     """
@@ -318,29 +427,25 @@ def calculate_teacher_pay(client, teacher_name, percentage_share):
         if df_billing.empty:
             return count, 0.0, 0.0
             
-        # Create a lookup dict: Student Name -> Rate
-        # Assuming "Rate" is column 2 (index), "Student Name" is 0
-        # Check col names first to be safe
+        # Create a lookup dict: Student Name (Norm) -> Rate (Clean)
+        # Assuming get_billing_data already cleaned columns and types
+        
         rate_map = {}
-        for index, row in df_billing.iterrows():
-             try:
-                 s_name = row["Student Name"]
-                 rate = float(str(row["Rate"]).replace(',', '').replace('$', '').replace('NGN', '').strip())
-                 rate_map[s_name] = rate
-             except:
-                 continue
-        
+        for _, row in df_billing.iterrows():
+             s_name = str(row.get("Student Name", "")).strip()
+             rate_val = row.get("Rate", 0.0) # Should be float from get_billing_data
+             if s_name:
+                 rate_map[s_name] = rate_val
+
+        # 3. Calculate Revenue
         total_revenue = 0.0
-        
-        # 3. Sum up revenue from each class
-        for rev in teacher_reviews:
-            student_taught = rev[2] # Column C
-            # Ensure exact match or approximate? Exact for now.
-            if student_taught in rate_map:
-                total_revenue += rate_map[student_taught]
-            else:
-                # Fallback: Maybe log missing rates?
-                pass
+        for review in teacher_reviews:
+            # Review Columns: [Timestamp, Teacher Name, Student Name, Review]
+            if len(review) > 2:
+                s_name = str(review[2]).strip()
+                # Lookup rate
+                r = rate_map.get(s_name, 0.0)
+                total_revenue += r
         
         teacher_pay = total_revenue * (percentage_share / 100.0)
         return count, total_revenue, teacher_pay
@@ -413,6 +518,221 @@ def parse_schedule_string(schedule_str):
                 result[day] = (datetime.time(9, 0), datetime.time(17, 0)) # Default 9-5 if parse error
                 
     return result
+
+# --- NEW SCHEDULE LOGIC & VALIDATION ---
+
+def parse_student_schedule(class_times_str):
+    """
+    Parses 'Subject (Day Time), Subject (Day Time)' string.
+    Returns list of dicts: [{'Day': 'Monday', 'Time': '06:00 PM', 'Subject': 'Maths', 'Raw': '...'}]
+    """
+    if not isinstance(class_times_str, str) or not class_times_str.strip():
+        return []
+
+    entries = []
+    # Split by comma
+    parts = [p.strip() for p in class_times_str.split(',')]
+    
+    day_map = {
+        "Mon": "Monday", "Tue": "Tuesday", "Wed": "Wednesday", "Thu": "Thursday", 
+        "Fri": "Friday", "Sat": "Saturday", "Sun": "Sunday"
+    }
+    
+    for part in parts:
+        if not part: continue
+        
+        # Regex: Subject \((Day) (Time)\)
+        # Fix for greedy matching: Use non-greedy .*? 
+        # And ensure we match the LAST occurrence of (Day Time) if multiple exist in a weird string, 
+        # or better, enforce strict structure for the parenthesis part.
+        
+        # Pattern: Starts with Subject, ends with (Day Time)
+        match = re.search(r"^(.*?)\s*\(\s*(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(\d{1,2}:\d{2}\s*[AP]M)\s*\)$", part, re.IGNORECASE)
+        
+        if match:
+            subj = match.group(1).strip()
+            day_short = match.group(2).title()
+            time_str = match.group(3).upper()
+            
+            # Additional clean up for subject if it contains trailing parens from bad splits?
+            # Start simple.
+            
+            # Convert time str to object for sorting?
+            try:
+                t_obj = datetime.datetime.strptime(time_str, "%I:%M %p").time()
+            except:
+                t_obj = None
+
+            entries.append({
+                "Subject": subj,
+                "Day": day_map.get(day_short, day_short),
+                "Time": time_str,
+                "TimeObj": t_obj, 
+                "Raw": part,
+                "Valid": True
+            })
+        else:
+            entries.append({
+                "Raw": part,
+                "Valid": False,
+                "Error": "Format mismatch. Expected: 'Subject (Day 00:00 PM)'"
+            })
+            
+    return entries
+
+def validate_data_integrity(client):
+    """
+    Checks for errors in Student 'Class Times' and returns a DataFrame of issues.
+    """
+    issues = []
+    
+    # 1. Check Students
+    df_students = get_students_data(client)
+    if not df_students.empty and "Class Times" in df_students.columns:
+        for idx, row in df_students.iterrows():
+            s_name = row.get("Student Name", f"Row {idx+2}")
+            c_times = str(row.get("Class Times", ""))
+            
+            if not c_times.strip():
+                continue # Empty is okay (maybe inactive)
+
+            parsed = parse_student_schedule(c_times)
+            for p in parsed:
+                if not p["Valid"]:
+                    issues.append({
+                        "Type": "Student Schedule",
+                        "Name": s_name,
+                        "Issue": p["Error"],
+                        "Raw Data": p["Raw"]
+                    })
+    
+    # 2. Check Teachers (Schedule Parsing)
+    df_teachers = get_teacher_data(client)
+    if not df_teachers.empty:
+        sched_col = "Class Schedule" if "Class Schedule" in df_teachers.columns else "Availability"
+        if sched_col in df_teachers.columns:
+            for idx, row in df_teachers.iterrows():
+                t_name = row.get("Teacher Name", f"Row {idx+2}")
+                sched = str(row.get(sched_col, ""))
+                
+                if sched.strip():
+                    # Use existing parse_schedule_string which returns a dict
+                    # If it returns distinct days but misses times, it defaults to 9-5.
+                    # We might want strict validation here too?
+                    # For now, let's just check if it parses at all.
+                    parsed = parse_schedule_string(sched)
+                    # Simple check: if sched has content but parsed is empty?
+                    if not parsed and len(sched) > 10:
+                         issues.append({
+                            "Type": "Teacher Availability",
+                            "Name": t_name,
+                            "Issue": "Could not parse availability string.",
+                            "Raw Data": sched
+                        })
+
+    # 3. Check Billing Data
+    df_billing = get_billing_data(client) # This is already cleaned! 
+    # But for integrity we might want to check the RAW data? 
+    # Ideally get_billing_data should handle cleaning silently for app, 
+    # but validate_data should see parsing errors.
+    # However, since get_billing_data returns 0.0 for bad data, we can just check for 0.0 rates?
+    # No, 0.0 might be valid for free class.
+    
+    # We can check specific logic logic on the *cleaned* dataframe
+    if not df_billing.empty:
+         if "Rate" in df_billing.columns:
+             # Check for 0.0 rates with "Hourly" billing? Might be suspicious.
+             for idx, r in df_billing.iterrows():
+                 if r.get("Billing Type") in ["hourly", "monthly"] and r.get("Rate") == 0.0:
+                      issues.append({
+                        "Type": "Billing",
+                        "Name": r.get("Student Name", f"Row {idx}"),
+                        "Issue": "Rate is 0.0 (Possible format error in original sheet)",
+                        "Raw Data": "View Sheet"
+                    })
+
+    return pd.DataFrame(issues)
+
+def generate_master_schedule(client, selected_day_full):
+    """
+    Generates a schedule based on Student Class Times.
+    """
+    agenda_items = []
+    
+    # 1. Get Students
+    df_students = get_students_data(client)
+    if df_students.empty or "Class Times" not in df_students.columns:
+        return pd.DataFrame()
+
+    # 2. Get Teachers (for matching)
+    df_teachers = get_teacher_data(client)
+    
+    # Pre-process teachers for faster lookup
+    # Map: refined logic to find teacher by Student Name
+    # Teacher dict: { 'Student Name': ['Teacher A', 'Teacher B'] }
+    student_teacher_map = {}
+    
+    if not df_teachers.empty and "Assigned Students" in df_teachers.columns:
+        for _, t_row in df_teachers.iterrows():
+            t_name = t_row.get("Teacher Name", "Unknown")
+            assigned_raw = str(t_row.get("Assigned Students", ""))
+            # Split by comma
+            assigned_list = [a.strip() for a in assigned_raw.split(',') if a.strip()]
+            
+            for s in assigned_list:
+                if s not in student_teacher_map:
+                    student_teacher_map[s] = []
+                student_teacher_map[s].append(t_name)
+
+    # 3. Iterate Students and Build Schedule
+    for _, s_row in df_students.iterrows():
+        s_name = s_row.get("Student Name", "Unknown")
+        c_times = str(s_row.get("Class Times", ""))
+        
+        parsed_classes = parse_student_schedule(c_times)
+        
+        for cls in parsed_classes:
+            if not cls["Valid"]: continue
+            
+            if cls["Day"] == selected_day_full:
+                # MATCH TEACHER
+                # 1. Direct Assignment
+                potential_teachers = student_teacher_map.get(s_name, [])
+                
+                final_teacher = "Unassigned"
+                if len(potential_teachers) == 1:
+                    final_teacher = potential_teachers[0]
+                elif len(potential_teachers) > 1:
+                    # Ambiguity! Try to match Subject?
+                    # TODO: Check teacher expertise.
+                    # For now, list all? or First? 
+                    final_teacher = ", ".join(potential_teachers)
+                
+                agenda_items.append({
+                    "Time": cls["Time"],
+                    "TimeObj": cls["TimeObj"],
+                    "Student": s_name,
+                    "Subject": cls["Subject"],
+                    "Teacher": final_teacher
+                })
+
+    # 4. Aggregate / Sort
+    if not agenda_items:
+        return pd.DataFrame()
+        
+    df = pd.DataFrame(agenda_items)
+    
+    # Sort by TimeObj
+    df = df.sort_values(by="TimeObj")
+    
+    # Drop TimeObj before return
+    df = df.drop(columns=["TimeObj"])
+    
+    # Reorder
+    df = df[["Time", "Teacher", "Subject", "Student"]]
+    
+    return df
+
 
 # --- SESSION MANAGEMENT (PHASE 2) ---
 import uuid

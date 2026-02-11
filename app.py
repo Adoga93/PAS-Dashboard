@@ -84,17 +84,12 @@ if tab == "Student Tab":
         paid_count = len(df_students[df_students["Payment Status"] == "Paid"])
         col2.metric("Paid", paid_count)
         
-        # Calculate Total Outstanding Balance from Billing Tab
-        df_billing = utils.get_billing_data(client)
+        # Calculate Total Outstanding Balance from Dynamic Calculation
+        df_balances = utils.get_all_student_balances(client)
         total_outstanding = 0.0
-        if not df_billing.empty and "Current Balance" in df_billing.columns:
-            # Clean and sum
-            def clean_balance(val):
-                try:
-                    return float(str(val).replace(',', '').replace('$', '').replace('NGN', '').strip())
-                except:
-                    return 0.0
-            total_outstanding = df_billing["Current Balance"].apply(clean_balance).sum()
+        if not df_balances.empty:
+            # ensure 'Total Owed' is numeric
+            total_outstanding = df_balances["Total Owed"].sum()
         
         col3.metric("Total Outstanding Balance", f"NGN {total_outstanding:,.2f}")
 
@@ -432,53 +427,54 @@ elif tab == "Admin Dashboard":
         selected_day_view = st.selectbox("Select Day", days_of_week, index=default_idx)
     
     # Fetch Teachers to build schedule
-    df_teachers_sched = utils.get_teacher_data(client)
+    # REF: Replaced with student-centric schedule generation (Phase 2 Refactor)
     
-    daily_agenda = []
-    
-    if not df_teachers_sched.empty:
-        for idx, t_row in df_teachers_sched.iterrows():
-            t_name = t_row.get("Teacher Name", "Unknown")
-            t_sched_str = t_row.get("Class Schedule", "")
-            t_expertise = t_row.get("Subject Expertise", "")
-            t_students = t_row.get("Assigned Students", "")
-            
-            # Parse
-            parsed = utils.parse_schedule_string(t_sched_str)
-            
-            if selected_day_view in parsed:
-                start_t, end_t = parsed[selected_day_view]
-                # Convert to string for display, but keep object for sorting if needed? 
-                # Let's just store sortable string or obj
-                
-                daily_agenda.append({
-                    "Time": f"{start_t.strftime('%I:%M %p')} - {end_t.strftime('%I:%M %p')}",
-                    "Teacher": t_name,
-                    "Subject/Expertise": t_expertise,
-                    "Assigned Students": t_students,
-                    "_sort_key": start_t # Hidden key for sorting
-                })
-    
-    if daily_agenda:
-        # Sort by start time
-        daily_agenda.sort(key=lambda x: x["_sort_key"])
+    # 1. Validation / Data Health Check
+    with st.expander("🛠️ Data Integrity Check (Click to view errors)"):
+        df_issues = utils.validate_data_integrity(client)
+        if not df_issues.empty:
+            st.error(f"Found {len(df_issues)} formatting issues in your Google Sheet.")
+            st.dataframe(df_issues, use_container_width=True)
+            st.caption("Please fix these in the Google Sheet (Students 'Class Times' or Teachers 'Schedule').")
+        else:
+            st.success("✅ Data looks good! No formatting errors found.")
+
+    # 2. Generate Schedule
+    if selected_day_view:
+        df_agenda = utils.generate_master_schedule(client, selected_day_full=selected_day_view)
         
-        # Remove sort key before display
-        for item in daily_agenda:
-            del item["_sort_key"]
-            
-        df_agenda = pd.DataFrame(daily_agenda)
-        st.dataframe(df_agenda, use_container_width=True, hide_index=True)
-    else:
-        st.info(f"No recurring classes scheduled for {selected_day_view}.")
-        
+        if not df_agenda.empty:
+            st.dataframe(df_agenda, use_container_width=True, hide_index=True)
+        else:
+            st.info(f"No classes scheduled for {selected_day_view}.")
+    
     st.markdown("---")
 
     df_students = utils.get_students_data(client)
     
     if not df_students.empty:
-        # Row 1: Charts
-        st.subheader("Financial Overview")
+        # Row 1: Charts & Billing Data
+        st.subheader("💰 Billing & Financials")
+        
+        # 1. Billing Overview Table
+        df_balances = utils.get_all_student_balances(client)
+        if not df_balances.empty:
+            # MEtrics
+            total_rev = df_balances["Total Owed"].sum()
+            total_classes = df_balances["Classes Count"].sum()
+            
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Total Revenue Expected", f"NGN {total_rev:,.2f}")
+            m2.metric("Total Classes Taught", f"{int(total_classes)}")
+            m3.metric("Number of Students", len(df_balances))
+            
+            with st.expander("View Detailed Billing Report", expanded=True):
+                st.dataframe(df_balances, use_container_width=True)
+        else:
+            st.info("No billing data computed.")
+            
+        st.markdown("---")
+        st.subheader("Financial Overview (Payment Status)")
         if "Payment Status" in df_students.columns:
             payment_counts = df_students["Payment Status"].value_counts().reset_index()
             payment_counts.columns = ["Status", "Count"]
