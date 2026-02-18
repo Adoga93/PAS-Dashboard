@@ -5,6 +5,8 @@ import streamlit as st
 import datetime
 import json
 import re
+import functools
+
 
 # Extracted from your screenshot
 SHEET_ID = "18Cs5gzcBCfG5tFETyOgNcqU4bi8W-8g44PvD3NYkMaI"
@@ -100,7 +102,9 @@ def retry_on_quota(func):
     """
     Decorator to retry API calls on Quota Exceeded error.
     """
+    @functools.wraps(func)
     def wrapper(*args, **kwargs):
+
         retries = 3
         delay = 2
         for i in range(retries):
