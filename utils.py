@@ -584,12 +584,34 @@ def parse_schedule_string(schedule_str):
                 
     return result
 
+def get_student_teacher_map(client):
+    """
+    Returns a dict mapping Normalized Student Name -> List of Teachers.
+    """
+    df_teachers = get_teacher_data(client)
+    student_teacher_map = {}
+    
+    if not df_teachers.empty and "Assigned Students" in df_teachers.columns:
+        for _, t_row in df_teachers.iterrows():
+            t_name = t_row.get("Teacher Name", "Unknown")
+            assigned_raw = str(t_row.get("Assigned Students", ""))
+            # Split by comma and normalize
+            assigned_list = [a.strip().lower() for a in assigned_raw.split(',') if a.strip()]
+            
+            for s in assigned_list:
+                if s not in student_teacher_map:
+                    student_teacher_map[s] = []
+                student_teacher_map[s].append(t_name)
+    return student_teacher_map
+
+
 # --- NEW SCHEDULE LOGIC & VALIDATION ---
 
 def parse_student_schedule(class_times_str):
     """
     Parses 'Subject (Day Time), Subject (Day Time)' string.
-    Returns list of dicts: [{'Day': 'Monday', 'Time': '06:00 PM', 'Subject': 'Maths', 'Raw': '...'}]
+    Supports 'Subject (Day Start - End)' format.
+    Returns list of dicts.
     """
     if not isinstance(class_times_str, str) or not class_times_str.strip():
         return []
@@ -606,33 +628,51 @@ def parse_student_schedule(class_times_str):
     for part in parts:
         if not part: continue
         
-        # Regex: Subject \((Day) (Time)\)
-        # Fix for greedy matching: Use non-greedy .*? 
-        # And ensure we match the LAST occurrence of (Day Time) if multiple exist in a weird string, 
-        # or better, enforce strict structure for the parenthesis part.
-        
-        # Pattern: Starts with Subject, ends with (Day Time)
-        match = re.search(r"^(.*?)\s*\(\s*(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(\d{1,2}:\d{2}\s*[AP]M)\s*\)$", part, re.IGNORECASE)
+        # Regex: Subject \((Day) (Start)( - End)?\)
+        # Group 1: Subject
+        # Group 2: Day
+        # Group 3: Start Time
+        # Group 4: End Time (Optional)
+        pattern = r"^(.*?)\s*\(\s*(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(\d{1,2}:\d{2}\s*[AP]M)(?:\s*-\s*(\d{1,2}:\d{2}\s*[AP]M))?\s*\)$"
+        match = re.search(pattern, part, re.IGNORECASE)
         
         if match:
             subj = match.group(1).strip()
             day_short = match.group(2).title()
-            time_str = match.group(3).upper()
+            start_str = match.group(3).upper()
+            end_str = match.group(4).upper() if match.group(4) else None
             
-            # Additional clean up for subject if it contains trailing parens from bad splits?
-            # Start simple.
+            t_start_obj = None
+            t_end_obj = None
+            duration_str = "Unknown"
             
-            # Convert time str to object for sorting?
             try:
-                t_obj = datetime.datetime.strptime(time_str, "%I:%M %p").time()
+                t_start_obj = datetime.datetime.strptime(start_str, "%I:%M %p").time()
+                if end_str:
+                    t_end_obj = datetime.datetime.strptime(end_str, "%I:%M %p").time()
+                    # Calculate duration
+                    d1 = datetime.datetime.combine(datetime.date.today(), t_start_obj)
+                    d2 = datetime.datetime.combine(datetime.date.today(), t_end_obj)
+                    diff = d2 - d1
+                    total_min = int(diff.total_seconds() / 60)
+                    hours = total_min // 60
+                    mins = total_min % 60
+                    if hours > 0 and mins > 0:
+                        duration_str = f"{hours}h {mins}m"
+                    elif hours > 0:
+                        duration_str = f"{hours}h"
+                    else:
+                        duration_str = f"{mins}m"
             except:
-                t_obj = None
+                pass
 
             entries.append({
                 "Subject": subj,
                 "Day": day_map.get(day_short, day_short),
-                "Time": time_str,
-                "TimeObj": t_obj, 
+                "Time": start_str,
+                "EndTime": end_str,
+                "TimeObj": t_start_obj,
+                "Duration": duration_str,
                 "Raw": part,
                 "Valid": True
             })
@@ -640,7 +680,7 @@ def parse_student_schedule(class_times_str):
             entries.append({
                 "Raw": part,
                 "Valid": False,
-                "Error": "Format mismatch. Expected: 'Subject (Day 00:00 PM)'"
+                "Error": "Format mismatch. Expected: 'Subject (Day Start - End)'"
             })
             
     return entries
@@ -695,24 +735,49 @@ def validate_data_integrity(client):
                             "Raw Data": sched
                         })
 
-    # 3. Check Billing Data
-    df_billing = get_billing_data(client) # This is already cleaned! 
-    # But for integrity we might want to check the RAW data? 
-    # Ideally get_billing_data should handle cleaning silently for app, 
-    # but validate_data should see parsing errors.
-    # However, since get_billing_data returns 0.0 for bad data, we can just check for 0.0 rates?
-    # No, 0.0 might be valid for free class.
+    return pd.DataFrame(issues)
+
+    # 3. Check for Unassigned Students & Billing
+    # Build Map
+    student_teacher_map = get_student_teacher_map(client)
     
-    # We can check specific logic logic on the *cleaned* dataframe
+    if not df_students.empty and "Student Name" in df_students.columns:
+         for idx, row in df_students.iterrows():
+             s_name = row.get("Student Name", "").strip()
+             if not s_name: continue
+             
+             # Check Assignment
+             if s_name.lower() not in student_teacher_map:
+                 issues.append({
+                    "Type": "Unassigned Student",
+                    "Name": s_name,
+                    "Issue": "No teacher has this student listed in 'Assigned Students'.",
+                    "Raw Data": "N/A"
+                 })
+             
+             # Check Schedule Durations (Re-using parse loop from above would be efficient, but keeping logic clean)
+             c_times = str(row.get("Class Times", ""))
+             parsed = parse_student_schedule(c_times)
+             for p in parsed:
+                 if p["Valid"] and not p.get("EndTime"):
+                     issues.append({
+                        "Type": "Missing Duration",
+                        "Name": s_name,
+                        "Issue": f"Class '{p['Subject']}' has no end time.",
+                        "Raw Data": p["Raw"]
+                     })
+
+
+    # 4. Check Billing Data
+    df_billing = get_billing_data(client) 
     if not df_billing.empty:
          if "Rate" in df_billing.columns:
-             # Check for 0.0 rates with "Hourly" billing? Might be suspicious.
              for idx, r in df_billing.iterrows():
                  if r.get("Billing Type") in ["hourly", "monthly"] and r.get("Rate") == 0.0:
                       issues.append({
                         "Type": "Billing",
                         "Name": r.get("Student Name", f"Row {idx}"),
-                        "Issue": "Rate is 0.0 (Possible format error in original sheet)",
+                        "Issue": "Rate is 0.0 (Possible format error)",
                         "Raw Data": "View Sheet"
                     })
 
@@ -729,25 +794,8 @@ def generate_master_schedule(client, selected_day_full):
     if df_students.empty or "Class Times" not in df_students.columns:
         return pd.DataFrame()
 
-    # 2. Get Teachers (for matching)
-    df_teachers = get_teacher_data(client)
-    
-    # Pre-process teachers for faster lookup
-    # Map: refined logic to find teacher by Student Name
-    # Teacher dict: { 'Student Name': ['Teacher A', 'Teacher B'] }
-    student_teacher_map = {}
-    
-    if not df_teachers.empty and "Assigned Students" in df_teachers.columns:
-        for _, t_row in df_teachers.iterrows():
-            t_name = t_row.get("Teacher Name", "Unknown")
-            assigned_raw = str(t_row.get("Assigned Students", ""))
-            # Split by comma
-            assigned_list = [a.strip() for a in assigned_raw.split(',') if a.strip()]
-            
-            for s in assigned_list:
-                if s not in student_teacher_map:
-                    student_teacher_map[s] = []
-                student_teacher_map[s].append(t_name)
+    # 2. Get Teachers (for matching) -> NOW USING HELPER
+    student_teacher_map = get_student_teacher_map(client)
 
     # 3. Iterate Students and Build Schedule
     for _, s_row in df_students.iterrows():
@@ -760,21 +808,20 @@ def generate_master_schedule(client, selected_day_full):
             if not cls["Valid"]: continue
             
             if cls["Day"] == selected_day_full:
-                # MATCH TEACHER
-                # 1. Direct Assignment
-                potential_teachers = student_teacher_map.get(s_name, [])
+                # MATCH TEACHER using Normalized Name
+                s_key = s_name.strip().lower()
+                potential_teachers = student_teacher_map.get(s_key, [])
                 
                 final_teacher = "Unassigned"
                 if len(potential_teachers) == 1:
                     final_teacher = potential_teachers[0]
                 elif len(potential_teachers) > 1:
-                    # Ambiguity! Try to match Subject?
-                    # TODO: Check teacher expertise.
-                    # For now, list all? or First? 
                     final_teacher = ", ".join(potential_teachers)
                 
                 agenda_items.append({
                     "Time": cls["Time"],
+                    "EndTime": cls["EndTime"] if cls["EndTime"] else "-",
+                    "Duration": cls["Duration"],
                     "TimeObj": cls["TimeObj"],
                     "Student": s_name,
                     "Subject": cls["Subject"],
@@ -794,7 +841,7 @@ def generate_master_schedule(client, selected_day_full):
     df = df.drop(columns=["TimeObj"])
     
     # Reorder
-    df = df[["Time", "Teacher", "Subject", "Student"]]
+    df = df[["Time", "EndTime", "Duration", "Teacher", "Subject", "Student"]]
     
     return df
 
