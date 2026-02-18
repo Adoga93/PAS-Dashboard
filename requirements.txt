@@ -3,3 +3,4 @@ gspread
 pandas
 plotly
 oauth2client
+func_timeout

@@ -164,7 +164,14 @@ elif tab == "Teacher Tab":
     st.markdown("Please submit your class review below.")
     
     with st.form("checkin_form"):
-        teacher_name = st.text_input("Your Name")
+        # Fetch teacher list
+        df_teachers_list = utils.get_teacher_data(client)
+        teacher_options = df_teachers_list["Teacher Name"].tolist() if not df_teachers_list.empty and "Teacher Name" in df_teachers_list.columns else []
+        
+        if teacher_options:
+            teacher_name = st.selectbox("Your Name", teacher_options)
+        else:
+            teacher_name = st.text_input("Your Name", help="Selectbox disabled: No teachers found.")
         
         # Fetch student list
         df_students = utils.get_students_data(client)
