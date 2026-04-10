@@ -245,14 +245,12 @@ def add_student(client, student_data, billing_data=None):
                 ]
                 ws_billing.append_row(row_billing)
             
+            get_students_data.clear()
+            get_billing_data.clear()
             return True
         except Exception as e:
             st.error(f"Error saving student: {e}")
             return False
-            
-    # Clear caches
-    get_students_data.clear()
-    get_billing_data.clear()
     return True
 
 def calculate_billing(client):
@@ -325,13 +323,12 @@ def update_billing_profile(client, student_name, billing_data, recalculate=False
                     ""
                 ]
                 ws_billing.append_row(row_billing)
-            
+            get_billing_data.clear()
             return True, f"Billing updated for {student_name}."
         except Exception as e:
+            st.error(f"Error updating billing: {e}")
             return False, str(e)
             
-    # Clear caches
-    get_billing_data.clear()
     return False, "No Sheet"
 
 def get_all_student_balances(client):
@@ -1116,6 +1113,7 @@ def end_class_v2(client, session_id):
                 s_name = ws.cell(row, 3).value
                 
                 add_review(client, t_name, s_name, "Class Completed (Session System)")
+                get_sessions_data.clear()
                 return True
         except Exception as e:
             st.error(f"Error ending: {e}")

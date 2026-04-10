@@ -119,7 +119,7 @@ if tab == "Student Tab":
         # Apply style if column exists
         if "Payment Status" in df_students.columns:
             st.dataframe(
-                df_display.style.applymap(highlight_status, subset=['Payment Status']),
+                df_display.style.map(highlight_status, subset=['Payment Status']),
                 use_container_width=True,
                 hide_index=True,
                 column_config=column_config
