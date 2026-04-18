@@ -280,7 +280,7 @@ elif tab == "Registration":
         all_subjects_data = []
         
         for i in range(st.session_state.reg_subject_rows):
-            c1, c2, c3, c4, c5 = st.columns(5)
+            c1, c2, c3, c4, c5, c6 = st.columns([3, 3, 2, 2, 2, 1])
             with c1:
                 sub = st.selectbox(f"Subject {i+1}", subject_options, key=f"sub_{i}")
             with c2:
@@ -291,14 +291,18 @@ elif tab == "Registration":
                 start_t = st.time_input(f"Start {i+1}", value=datetime.time(9, 0), key=f"start_{i}")
             with c5:
                 end_t = st.time_input(f"End {i+1}", value=datetime.time(10, 0), key=f"end_{i}")
+            with c6:
+                st.markdown("<br>", unsafe_allow_html=True) # Align with input boxes
+                is_deleted = st.checkbox("🗑️", key=f"del_{i}")
             
-            all_subjects_data.append({
-                "Subject": sub,
-                "Teacher": tcher,
-                "Day": day,
-                "StartTime": start_t,
-                "EndTime": end_t
-            })
+            if not is_deleted:
+                all_subjects_data.append({
+                    "Subject": sub,
+                    "Teacher": tcher,
+                    "Day": day,
+                    "StartTime": start_t,
+                    "EndTime": end_t
+                })
 
         def add_subject_row():
             st.session_state.reg_subject_rows += 1
@@ -614,7 +618,7 @@ elif tab == "Admin Dashboard":
                                     except:
                                         pass
                             
-                            c1, c2, c3, c4, c5 = st.columns(5)
+                            c1, c2, c3, c4, c5, c6 = st.columns([3, 3, 2, 2, 2, 1])
                             with c1:
                                 sub = st.selectbox(f"Subject {i+1}", standard_subjects, index=standard_subjects.index(def_sub) if def_sub in standard_subjects else 0, key=f"esub_{i}")
                             with c2:
@@ -625,14 +629,18 @@ elif tab == "Admin Dashboard":
                                 start_t = st.time_input(f"Start {i+1}", value=def_start, key=f"estart_{i}")
                             with c5:
                                 end_t = st.time_input(f"End {i+1}", value=def_end, key=f"eend_{i}")
+                            with c6:
+                                st.markdown("<br>", unsafe_allow_html=True)
+                                is_deleted = st.checkbox("🗑️", key=f"edel_{i}")
                             
-                            all_edit_subjects.append({
-                                "Subject": sub,
-                                "Teacher": tcher,
-                                "Day": day,
-                                "StartTime": start_t,
-                                "EndTime": end_t
-                            })
+                            if not is_deleted:
+                                all_edit_subjects.append({
+                                    "Subject": sub,
+                                    "Teacher": tcher,
+                                    "Day": day,
+                                    "StartTime": start_t,
+                                    "EndTime": end_t
+                                })
                             
                         def add_edit_subject_row():
                             st.session_state.edit_subject_rows += 1
