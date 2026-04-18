@@ -538,7 +538,7 @@ elif tab == "Admin Dashboard":
                     # Get current data - Find row where Student Name matches
                     curr_s = df_students[df_students["Student Name"] == sel_s_edit].iloc[0]
                     
-                    with st.form("edit_s_form"):
+                    with st.container():
                         # Use .get with defaults. keys match exact sheet headers usually.
                         
                         es_name = st.text_input("Name", curr_s.get("Student Name", ""), help="Changing name will update Billing profile too.")
@@ -614,7 +614,7 @@ elif tab == "Admin Dashboard":
                             
                         es_times = ", ".join(class_times_parts)
                         
-                        if st.form_submit_button("Update Student"):
+                        if st.button("Update Student", key="submit_edit_student"):
                             success, msg = utils.update_student(client, sel_s_edit, {
                                 "Name": es_name,
                                 "Email": es_email,

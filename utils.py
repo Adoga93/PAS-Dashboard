@@ -159,7 +159,10 @@ def get_students_data(_client):
         try:
             worksheet = sheet.worksheet("Students")
             data = worksheet.get_all_records()
-            return pd.DataFrame(data)
+            df = pd.DataFrame(data)
+            if "Phone" in df.columns: df["Phone"] = df["Phone"].astype(str)
+            if "Phone Number" in df.columns: df["Phone Number"] = df["Phone Number"].astype(str)
+            return df
         except Exception as e:
             st.error(f"Error reading 'Students' tab: {e}")
             return pd.DataFrame() 
@@ -467,7 +470,10 @@ def get_teacher_data(_client):
         try:
              worksheet = sheet.worksheet("Teachers")
              data = worksheet.get_all_records()
-             return pd.DataFrame(data)
+             df = pd.DataFrame(data)
+             if "Phone" in df.columns: df["Phone"] = df["Phone"].astype(str)
+             if "Phone Number" in df.columns: df["Phone Number"] = df["Phone Number"].astype(str)
+             return df
         except Exception:
              return pd.DataFrame()
     return pd.DataFrame()
