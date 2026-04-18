@@ -12,9 +12,9 @@ import functools
 STANDARD_SUBJECTS = [
     "Maths", "English", "Physics", "Chemistry", "Biology", "Science", 
     "History", "Geography", "Literacy", "Reading", "Comprehension", 
-    "Creative writing", "Spelling", "Spelling and Grammar", "Verbal reasoning", 
-    "Quantitative reasoning", "Phonics", "Phonix", "Social Studies", 
-    "Computer Science", "Art", "Music", "Other"
+    "Creative writing", "Spelling", "Grammar", "Grammer", "Spelling and Grammar", 
+    "Verbal reasoning", "Quantitative reasoning", "Phonics", "Phonix", 
+    "Social Studies", "Computer Science", "Art", "Music", "Other"
 ]
 
 # Extracted from your screenshot
