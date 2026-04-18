@@ -259,11 +259,52 @@ def add_student(client, student_data, billing_data=None):
             
             get_students_data.clear()
             get_billing_data.clear()
+            
+            # Sync teacher assignments (add this student to their Assigned Students lists)
+            if "Selected Teachers" in student_data:
+                sync_student_to_teachers(client, student_data.get("Name"), student_data.get("Selected Teachers"))
+            
+            # Sync teacher schedule based on class times
+            sync_teacher_schedule_from_student(client, student_data.get("Name"))
+            
             return True
         except Exception as e:
             st.error(f"Error saving student: {e}")
             return False
     return True
+
+def delete_student(client, student_name):
+    """
+    Completely removes a student from Students, Billing, and unassigns them from all teachers.
+    """
+    sheet = get_sheet_by_id(client)
+    if not sheet: return False, "No Sheet"
+    
+    try:
+        # First, unassign from all teachers before they are removed
+        sync_student_to_teachers(client, student_name, [])
+        sync_teacher_schedule_from_student(client, student_name)
+        
+        # Remove from Students tab
+        ws_students = sheet.worksheet("Students")
+        s_cell = ws_students.find(student_name)
+        if s_cell:
+            ws_students.delete_rows(s_cell.row)
+            
+        # Try to remove from Billing tab
+        try:
+            ws_billing = sheet.worksheet("Billing")
+            b_cell = ws_billing.find(student_name)
+            if b_cell:
+                ws_billing.delete_rows(b_cell.row)
+        except:
+            pass # Fail silently if billing doesn't have them
+            
+        get_students_data.clear()
+        get_billing_data.clear()
+        return True, "Student deleted successfully!"
+    except Exception as e:
+        return False, str(e)
 
 def calculate_billing(client):
     """

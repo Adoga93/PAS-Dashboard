@@ -272,18 +272,33 @@ elif tab == "Registration":
         subject_options = utils.STANDARD_SUBJECTS
         day_options = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
         
+        df_teachers_list = utils.get_teacher_data(client)
+        teacher_options = ["Unassigned"]
+        if not df_teachers_list.empty and "Teacher Name" in df_teachers_list.columns:
+            teacher_options.extend(df_teachers_list["Teacher Name"].tolist())
+            
         all_subjects_data = []
         
         for i in range(st.session_state.reg_subject_rows):
-            col1, col2, col3 = st.columns(3)
-            with col1:
+            c1, c2, c3, c4, c5 = st.columns(5)
+            with c1:
                 sub = st.selectbox(f"Subject {i+1}", subject_options, key=f"sub_{i}")
-            with col2:
+            with c2:
+                tcher = st.selectbox(f"Teacher {i+1}", teacher_options, key=f"eteach_{i}")
+            with c3:
                 day = st.selectbox(f"Day {i+1}", day_options, key=f"day_{i}")
-            with col3:
-                time = st.time_input(f"Time {i+1}", key=f"time_{i}")
+            with c4:
+                start_t = st.time_input(f"Start {i+1}", value=datetime.time(9, 0), key=f"start_{i}")
+            with c5:
+                end_t = st.time_input(f"End {i+1}", value=datetime.time(10, 0), key=f"end_{i}")
             
-            all_subjects_data.append({"Subject": sub, "Day": day, "Time": time})
+            all_subjects_data.append({
+                "Subject": sub,
+                "Teacher": tcher,
+                "Day": day,
+                "StartTime": start_t,
+                "EndTime": end_t
+            })
 
         def add_subject_row():
             st.session_state.reg_subject_rows += 1
@@ -307,13 +322,16 @@ elif tab == "Registration":
         if st.button("Register Student"):
             if name:
                 # Format strings
-                subject_list = [entry['Subject'] for entry in all_subjects_data]
+                subject_list = list(set([entry['Subject'] for entry in all_subjects_data]))
                 subjects_str = ", ".join(subject_list)
+                
+                selected_teachers = list(set([entry["Teacher"] for entry in all_subjects_data if entry["Teacher"] != "Unassigned"]))
                 
                 class_times_parts = []
                 for entry in all_subjects_data:
-                    t_str = entry['Time'].strftime("%I:%M %p")
-                    class_times_parts.append(f"{entry['Subject']} ({entry['Day'][:3]} {t_str})")
+                    s_str = entry['StartTime'].strftime("%I:%M %p")
+                    e_str = entry['EndTime'].strftime("%I:%M %p")
+                    class_times_parts.append(f"{entry['Subject']} ({entry['Day'][:3]} {s_str} - {e_str})")
                 
                 class_times_str = ", ".join(class_times_parts)
                 
@@ -322,7 +340,8 @@ elif tab == "Registration":
                     "Email": email,
                     "Phone": phone,
                     "Class Times": class_times_str,
-                    "Subjects": subjects_str
+                    "Subjects": subjects_str,
+                    "Selected Teachers": selected_teachers
                 }
                 
                 if utils.add_student(client, student_data, billing_data={
@@ -634,21 +653,35 @@ elif tab == "Admin Dashboard":
                             
                         es_times = ", ".join(class_times_parts)
                         
-                        if st.button("Update Student", key="submit_edit_student"):
-                            success, msg = utils.update_student(client, sel_s_edit, {
-                                "Name": es_name,
-                                "Email": es_email,
-                                "Phone": es_phone,
-                                "Subjects": es_subj,
-                                "Class Times": es_times,
-                                "Selected Teachers": selected_teachers
-                            })
-                            if success: 
-                                st.success(msg)
-                                time.sleep(1)
-                                st.rerun()
-                            else: 
-                                st.error(msg)
+                        st.markdown("---")
+                        col_update, col_delete = st.columns(2)
+                        
+                        with col_update:
+                            if st.button("Update Student", key="submit_edit_student"):
+                                success, msg = utils.update_student(client, sel_s_edit, {
+                                    "Name": es_name,
+                                    "Email": es_email,
+                                    "Phone": es_phone,
+                                    "Subjects": es_subj,
+                                    "Class Times": es_times,
+                                    "Selected Teachers": selected_teachers
+                                })
+                                if success: 
+                                    st.success(msg)
+                                    time.sleep(1)
+                                    st.rerun()
+                                else: 
+                                    st.error(msg)
+                                    
+                        with col_delete:
+                            if st.button("Delete Student", key="delete_s_btn", type="primary"):
+                                success, msg = utils.delete_student(client, sel_s_edit)
+                                if success:
+                                    st.success(msg)
+                                    time.sleep(1)
+                                    st.rerun()
+                                else:
+                                    st.error(msg)
 
             with et2:
                 st.caption("Select a teacher to update their profile.")
