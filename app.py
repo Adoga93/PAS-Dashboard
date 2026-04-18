@@ -269,12 +269,7 @@ elif tab == "Registration":
         
         st.markdown("### Subjects & Class Times")
         
-        subject_options = [
-            "Maths", "English", "Physics", "Chemistry", "Biology", "Science", "History", "Geography",
-            "Literacy", "Reading", "Creative writing", "Spelling", "Verbal reasoning", "Quantitative reasoning",
-            "Phonics", "Social Studies", "Art", "Music", "Computer Science",
-            "Other"
-        ]
+        subject_options = utils.STANDARD_SUBJECTS
         day_options = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
         
         all_subjects_data = []
@@ -349,12 +344,7 @@ elif tab == "Registration":
         email = st.text_input("Email")
         phone = st.text_input("Phone Number")
         # Use the same subject options for expertise, or a similar list
-        subject_options = [
-            "Maths", "English", "Physics", "Chemistry", "Biology", "Science", "History", "Geography",
-            "Literacy", "Reading", "Creative writing", "Spelling", "Verbal reasoning", "Quantitative reasoning",
-            "Phonics", "Social Studies", "Art", "Music", "Computer Science",
-            "Other"
-        ]
+        subject_options = utils.STANDARD_SUBJECTS
         expertise_list = st.multiselect("Expertise (Subjects)", subject_options)
         expertise = ", ".join(expertise_list)
         
@@ -542,10 +532,7 @@ elif tab == "Admin Dashboard":
                 sel_s_edit = st.selectbox("Select Student", s_list_edit, key="edit_s_sel")
                 
                 # Standard Subject List
-                standard_subjects = [
-                    "Maths", "English", "Physics", "Chemistry", "Biology", "Science", 
-                    "History", "Geography", "Literacy", "Computer Science", "Art", "Music", "Other"
-                ]
+                standard_subjects = utils.STANDARD_SUBJECTS
                 
                 if sel_s_edit and not df_students.empty and "Student Name" in df_students.columns:
                     # Get current data - Find row where Student Name matches
@@ -558,18 +545,74 @@ elif tab == "Admin Dashboard":
                         es_email = st.text_input("Email", curr_s.get("Email", "")) # or "Email Address"?
                         es_phone = st.text_input("Phone", curr_s.get("Phone", "")) # or "Phone Number"?
                         
-                        # Subjects Multiselect
-                        curr_subs_str = str(curr_s.get("Subjects", ""))
-                        curr_subs_list = [x.strip() for x in curr_subs_str.split(",")] if curr_subs_str else []
-                        # Ensure defaults are in options or add custom ones? 
-                        # For simplicity, we filter to defaults.
-                        valid_subs = [x for x in curr_subs_list if x in standard_subjects]
-                        # If meaningful data is lost, we might need to handle "Other" better, but usually okay.
+                        curr_times_str = str(curr_s.get("Class Times", ""))
                         
-                        es_subj_list = st.multiselect("Subjects", standard_subjects, default=valid_subs)
+                        if "edit_student_name" not in st.session_state or st.session_state.edit_student_name != sel_s_edit:
+                            st.session_state.edit_student_name = sel_s_edit
+                            parsed_classes = utils.parse_student_schedule(curr_times_str)
+                            valid_classes = [c for c in parsed_classes if c.get("Valid")]
+                            st.session_state.edit_subject_rows = max(1, len(valid_classes))
+                            st.session_state.edit_class_data = valid_classes
+                            
+                        st.markdown("### Subjects & Class Times")
+                        day_options = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+                        
+                        all_edit_subjects = []
+                        
+                        for i in range(st.session_state.edit_subject_rows):
+                            # Try to get defaults if they exist
+                            def_sub = standard_subjects[0]
+                            def_day = "Monday"
+                            def_start = datetime.time(9, 0)
+                            def_end = datetime.time(10, 0)
+                            
+                            if i < len(st.session_state.edit_class_data):
+                                c_data = st.session_state.edit_class_data[i]
+                                if c_data.get("Subject") in standard_subjects:
+                                    def_sub = c_data["Subject"]
+                                if c_data.get("Day") in day_options:
+                                    def_day = c_data["Day"]
+                                if c_data.get("TimeObj"):
+                                    def_start = c_data["TimeObj"]
+                                if c_data.get("EndTime") and c_data.get("EndTime") != "-":
+                                    try:
+                                        def_end = datetime.datetime.strptime(c_data["EndTime"], "%I:%M %p").time()
+                                    except:
+                                        pass
+                            
+                            c1, c2, c3, c4 = st.columns(4)
+                            with c1:
+                                sub = st.selectbox(f"Subject {i+1}", standard_subjects, index=standard_subjects.index(def_sub) if def_sub in standard_subjects else 0, key=f"esub_{i}")
+                            with c2:
+                                day = st.selectbox(f"Day {i+1}", day_options, index=day_options.index(def_day) if def_day in day_options else 0, key=f"eday_{i}")
+                            with c3:
+                                start_t = st.time_input(f"Start Time {i+1}", value=def_start, key=f"estart_{i}")
+                            with c4:
+                                end_t = st.time_input(f"End Time {i+1}", value=def_end, key=f"eend_{i}")
+                            
+                            all_edit_subjects.append({
+                                "Subject": sub,
+                                "Day": day,
+                                "StartTime": start_t,
+                                "EndTime": end_t
+                            })
+                            
+                        def add_edit_subject_row():
+                            st.session_state.edit_subject_rows += 1
+                            
+                        st.button("+ Add Another Subject", on_click=add_edit_subject_row, key="add_esub_btn")
+                        
+                        # Rebuild subjects & times strings
+                        es_subj_list = list(set([entry["Subject"] for entry in all_edit_subjects]))
                         es_subj = ", ".join(es_subj_list)
                         
-                        es_times = st.text_input("Class Times", curr_s.get("Class Times", ""))
+                        class_times_parts = []
+                        for entry in all_edit_subjects:
+                            s_str = entry["StartTime"].strftime("%I:%M %p")
+                            e_str = entry["EndTime"].strftime("%I:%M %p")
+                            class_times_parts.append(f"{entry['Subject']} ({entry['Day'][:3]} {s_str} - {e_str})")
+                            
+                        es_times = ", ".join(class_times_parts)
                         
                         if st.form_submit_button("Update Student"):
                             success, msg = utils.update_student(client, sel_s_edit, {
@@ -722,36 +765,38 @@ elif tab == "Admin Dashboard":
                 t_list = df_teachers["Teacher Name"].tolist()
                 selected_t = st.selectbox("Select Teacher", t_list, key="pay_t_select")
                 
-                pay_share = st.number_input("Teacher Share (%)", min_value=0.0, max_value=100.0, value=70.0, step=5.0, key="pay_t_share")
+                monthly_fee = st.number_input("Teacher Monthly Fee (NGN)", min_value=0.0, step=5000.0, value=20000.0, key="pay_t_fee")
                 
-                if st.button("Calculate Pay"):
-                    # 1. Actual Pay (Retroactive from Reviews)
-                    count, total_revenue, teacher_pay = utils.calculate_teacher_pay(client, selected_t, pay_share)
-                    
-                    # 2. Projected Pay (Forward-looking from Schedule)
-                    # For projection, we need an estimated rate. Since rates vary per student, this is tricky.
-                    # Simplified approach: Estimate Revenue using an Average Student Rate (e.g. 5000) for now, 
-                    # or just show the class count projection.
+                if st.button("Calculate Pay & Generate Report"):
+                    count, total_revenue, teacher_pay, df_breakdown = utils.calculate_teacher_pay(client, selected_t, monthly_fee)
                     
                     teacher_row = df_teachers[df_teachers["Teacher Name"] == selected_t].iloc[0]
                     schedule_str = str(teacher_row.get("Class Schedule", ""))
                     estimated_classes = utils.estimate_monthly_classes(schedule_str)
                     
-                    # Rough projection: Assume average class value of 5000 NGN ?? 
-                    # Better: Don't show money projection if we don't know who attends. 
-                    # But user wants expectation. 
-                    # Let's use a "Projected Base Revenue" if we had one. 
-                    # For now, let's just show the Projected Classes count.
-                    
                     c1, c2 = st.columns(2)
                     with c1:
                         st.info(f"Classes Taught: {count}")
                         st.metric("Total Revenue Generated", f"NGN {total_revenue:,.2f}")
-                        st.success(f"💰 Teacher Pay ({pay_share}%): NGN {teacher_pay:,.2f}")
+                        st.success(f"💰 Teacher Pay: NGN {teacher_pay:,.2f}")
                     
                     with c2:
                         st.info(f"Projected Monthly Classes: {estimated_classes}")
-                        st.caption("Revenue projection requires knowing specific student attendance.")
+                        st.caption("Based on the teacher's current weekly class schedule.")
+                    
+                    if not df_breakdown.empty:
+                        st.markdown("#### Teacher Revenue Breakdown")
+                        st.caption("Shows how much revenue each of this teacher's students brought in based on actual classes taught (from Reviews tab).")
+                        # Format currencies in dataframe
+                        df_display = df_breakdown.copy()
+                        if "Student Rate (NGN)" in df_display.columns:
+                            df_display["Student Rate (NGN)"] = df_display["Student Rate (NGN)"].apply(lambda x: f"NGN {float(x):,.2f}" if pd.notnull(x) else "NGN 0.00")
+                        if "Revenue Generated (NGN)" in df_display.columns:
+                            df_display["Revenue Generated (NGN)"] = df_display["Revenue Generated (NGN)"].apply(lambda x: f"NGN {float(x):,.2f}" if pd.notnull(x) else "NGN 0.00")
+                            
+                        st.dataframe(df_display, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No classes recorded for this teacher yet.")
             else:
                 if df_teachers.empty:
                     st.warning("No teachers found. Please ensure the 'Teachers' tab exists and has data.")
@@ -781,7 +826,7 @@ elif tab == "Admin Dashboard":
                 sc_student = st.selectbox("Student", students_list)
                 
                 # Subject Dropdown (Standard + Other)
-                subject_opts = ["Maths", "English", "Physics", "Chemistry", "Biology", "Science", "History", "Geography", "Literacy", "Other"]
+                subject_opts = utils.STANDARD_SUBJECTS
                 sc_subject = st.selectbox("Subject", subject_opts)
                 if sc_subject == "Other":
                     sc_subject = st.text_input("Enter Subject")
