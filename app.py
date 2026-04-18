@@ -557,11 +557,26 @@ elif tab == "Admin Dashboard":
                         st.markdown("### Subjects & Class Times")
                         day_options = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
                         
+                        df_teachers_list = utils.get_teacher_data(client)
+                        teacher_options = ["Unassigned"]
+                        if not df_teachers_list.empty and "Teacher Name" in df_teachers_list.columns:
+                            teacher_options.extend(df_teachers_list["Teacher Name"].tolist())
+                            
+                        # Find current assigned teachers for THIS student
+                        curr_student_norm = sel_s_edit.strip().lower()
+                        current_teachers_mapped = []
+                        if not df_teachers_list.empty:
+                            for _, t_row in df_teachers_list.iterrows():
+                                assigned = str(t_row.get("Assigned Students", ""))
+                                if curr_student_norm in [a.strip().lower() for a in assigned.split(",")]:
+                                    current_teachers_mapped.append(t_row.get("Teacher Name"))
+                        
                         all_edit_subjects = []
                         
                         for i in range(st.session_state.edit_subject_rows):
                             # Try to get defaults if they exist
                             def_sub = standard_subjects[0]
+                            def_teacher = current_teachers_mapped[0] if current_teachers_mapped else "Unassigned"
                             def_day = "Monday"
                             def_start = datetime.time(9, 0)
                             def_end = datetime.time(10, 0)
@@ -580,18 +595,21 @@ elif tab == "Admin Dashboard":
                                     except:
                                         pass
                             
-                            c1, c2, c3, c4 = st.columns(4)
+                            c1, c2, c3, c4, c5 = st.columns(5)
                             with c1:
                                 sub = st.selectbox(f"Subject {i+1}", standard_subjects, index=standard_subjects.index(def_sub) if def_sub in standard_subjects else 0, key=f"esub_{i}")
                             with c2:
-                                day = st.selectbox(f"Day {i+1}", day_options, index=day_options.index(def_day) if def_day in day_options else 0, key=f"eday_{i}")
+                                tcher = st.selectbox(f"Teacher {i+1}", teacher_options, index=teacher_options.index(def_teacher) if def_teacher in teacher_options else 0, key=f"eteach_{i}")
                             with c3:
-                                start_t = st.time_input(f"Start Time {i+1}", value=def_start, key=f"estart_{i}")
+                                day = st.selectbox(f"Day {i+1}", day_options, index=day_options.index(def_day) if def_day in day_options else 0, key=f"eday_{i}")
                             with c4:
-                                end_t = st.time_input(f"End Time {i+1}", value=def_end, key=f"eend_{i}")
+                                start_t = st.time_input(f"Start {i+1}", value=def_start, key=f"estart_{i}")
+                            with c5:
+                                end_t = st.time_input(f"End {i+1}", value=def_end, key=f"eend_{i}")
                             
                             all_edit_subjects.append({
                                 "Subject": sub,
+                                "Teacher": tcher,
                                 "Day": day,
                                 "StartTime": start_t,
                                 "EndTime": end_t
@@ -605,6 +623,8 @@ elif tab == "Admin Dashboard":
                         # Rebuild subjects & times strings
                         es_subj_list = list(set([entry["Subject"] for entry in all_edit_subjects]))
                         es_subj = ", ".join(es_subj_list)
+                        
+                        selected_teachers = list(set([entry["Teacher"] for entry in all_edit_subjects if entry["Teacher"] != "Unassigned"]))
                         
                         class_times_parts = []
                         for entry in all_edit_subjects:
@@ -620,7 +640,8 @@ elif tab == "Admin Dashboard":
                                 "Email": es_email,
                                 "Phone": es_phone,
                                 "Subjects": es_subj,
-                                "Class Times": es_times
+                                "Class Times": es_times,
+                                "Selected Teachers": selected_teachers
                             })
                             if success: 
                                 st.success(msg)

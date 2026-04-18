@@ -1187,6 +1187,10 @@ def update_student(client, original_name, updated_data):
                 get_students_data.clear()
                 get_billing_data.clear()
                 
+                # Sync teacher assignments (add/remove this student from their Assigned Students lists)
+                if "Selected Teachers" in updated_data:
+                    sync_student_to_teachers(client, updated_data.get("Name"), updated_data.get("Selected Teachers"))
+                
                 # Sync teacher schedule based on new class times
                 sync_teacher_schedule_from_student(client, updated_data.get("Name"))
                 
@@ -1196,6 +1200,53 @@ def update_student(client, original_name, updated_data):
         except Exception as e:
             return False, str(e)
     return False, "No Sheet"
+
+def sync_student_to_teachers(client, student_name, selected_teachers):
+    """
+    Ensures that the student is strictly in the 'Assigned Students' list 
+    of the chosen teachers, and removed from any others.
+    """
+    try:
+        df_teachers = get_teacher_data(client)
+        if df_teachers.empty: return False
+        
+        sheet = get_sheet_by_id(client)
+        ws_teachers = sheet.worksheet("Teachers")
+        
+        student_norm = student_name.strip().lower()
+        
+        for idx, t_row in df_teachers.iterrows():
+            t_name = str(t_row.get("Teacher Name", ""))
+            if not t_name: continue
+            
+            assigned_raw = str(t_row.get("Assigned Students", ""))
+            assigned_list = [a.strip() for a in assigned_raw.split(",") if a.strip()]
+            assigned_norm = [a.lower() for a in assigned_list]
+            
+            needs_update = False
+            
+            if t_name in selected_teachers:
+                # Should be assigned
+                if student_norm not in assigned_norm:
+                    assigned_list.append(student_name.strip())
+                    needs_update = True
+            else:
+                # Should NOT be assigned
+                if student_norm in assigned_norm:
+                    assigned_list = [a for a in assigned_list if a.lower() != student_norm]
+                    needs_update = True
+                    
+            if needs_update:
+                final_assigned_str = ", ".join(assigned_list)
+                t_cell = ws_teachers.find(t_name)
+                if t_cell:
+                    ws_teachers.update_cell(t_cell.row, 5, final_assigned_str) # Column E is assigned students
+                    
+        get_teacher_data.clear()
+        return True
+    except Exception as e:
+        print(f"Error syncing student to teachers: {e}")
+        return False
 
 def sync_teacher_schedule_from_student(client, student_name):
     """
