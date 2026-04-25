@@ -786,13 +786,14 @@ def validate_data_integrity(client):
                 sched = str(row.get(sched_col, ""))
                 
                 if sched.strip():
-                    # Use existing parse_schedule_string which returns a dict
-                    # If it returns distinct days but misses times, it defaults to 9-5.
-                    # We might want strict validation here too?
-                    # For now, let's just check if it parses at all.
-                    parsed = parse_schedule_string(sched)
-                    # Simple check: if sched has content but parsed is empty?
-                    if not parsed and len(sched) > 10:
+                    # The Teacher's Class Schedule is now synced from students' Class Times.
+                    # It uses the format 'Subject (Day Start - End)'.
+                    parsed = parse_student_schedule(sched)
+                    
+                    # If all parsed entries are invalid and there is some content, report an error
+                    valid_entries = [p for p in parsed if p.get("Valid")]
+                    
+                    if not valid_entries and len(sched) > 10:
                          issues.append({
                             "Type": "Teacher Availability",
                             "Name": t_name,

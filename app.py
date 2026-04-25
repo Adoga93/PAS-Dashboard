@@ -53,6 +53,17 @@ if "action" in query_params and query_params["action"] == "clock_in":
 # --- SIDEBAR ---
 st.sidebar.title("PAS Tutors")
 st.sidebar.markdown("---")
+
+if st.sidebar.button("🔄 Sync with Database (Refresh)"):
+    utils.get_students_data.clear()
+    utils.get_teacher_data.clear()
+    utils.get_billing_data.clear()
+    utils.get_sessions_data.clear()
+    st.sidebar.success("Cache cleared! Reloading fresh data...")
+    time.sleep(0.5)
+    st.rerun()
+
+st.sidebar.markdown("---")
 tab = st.sidebar.radio("Navigate to", ["Student Tab", "Teacher Tab", "Registration", "Admin Dashboard"])
 
 # --- STUDENT TAB ---
