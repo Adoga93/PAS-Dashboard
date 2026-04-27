@@ -702,12 +702,13 @@ def parse_student_schedule(class_times_str):
     for part in parts:
         if not part: continue
         
-        # Regex: Subject \((Day) (Start)( - End)?\)
+        # Regex: Subject \((Day) (Start)( - End)?\) OR Subject \((Day) (Start)( - End)?\) \[Teacher\]
         # Group 1: Subject
         # Group 2: Day
         # Group 3: Start Time
         # Group 4: End Time (Optional)
-        pattern = r"^(.*?)\s*\(\s*(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(\d{1,2}:\d{2}\s*[AP]M)(?:\s*-\s*(\d{1,2}:\d{2}\s*[AP]M))?\s*\)$"
+        # Group 5: Teacher (Optional)
+        pattern = r"^(.*?)\s*\(\s*(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(\d{1,2}:\d{2}\s*[AP]M)(?:\s*-\s*(\d{1,2}:\d{2}\s*[AP]M))?\s*\)(?:\s*\[(.*?)\])?$"
         match = re.search(pattern, part, re.IGNORECASE)
         
         if match:
@@ -715,6 +716,8 @@ def parse_student_schedule(class_times_str):
             day_short = match.group(2).title()
             start_str = match.group(3).upper()
             end_str = match.group(4).upper() if match.group(4) else None
+            
+            t_name_assigned = match.group(5).strip() if match.group(5) else None
             
             t_start_obj = None
             t_end_obj = None
@@ -747,6 +750,7 @@ def parse_student_schedule(class_times_str):
                 "EndTime": end_str,
                 "TimeObj": t_start_obj,
                 "Duration": duration_str,
+                "AssignedTeacher": t_name_assigned,
                 "Raw": part,
                 "Valid": True
             })
@@ -883,22 +887,25 @@ def generate_master_schedule(client, selected_day_full):
             if not cls["Valid"]: continue
             
             if cls["Day"] == selected_day_full:
-                # MATCH TEACHER using Normalized Name and Subject Expertise
-                s_key = s_name.strip().lower()
-                subj_key = cls["Subject"].strip().lower()
-                potential_teachers_data = student_teacher_map.get(s_key, [])
-                
-                potential_teachers = []
-                for t in potential_teachers_data:
-                    # Match if teacher has no expertise listed (fallback), or if their expertise includes this subject
-                    if not t["expertise"] or subj_key in t["expertise"]:
-                        potential_teachers.append(t["name"])
-                
-                final_teacher = "Unassigned"
-                if len(potential_teachers) == 1:
-                    final_teacher = potential_teachers[0]
-                elif len(potential_teachers) > 1:
-                    final_teacher = ", ".join(potential_teachers)
+                if cls.get("AssignedTeacher"):
+                    final_teacher = cls["AssignedTeacher"]
+                else:
+                    # MATCH TEACHER using Normalized Name and Subject Expertise (legacy fallback)
+                    s_key = s_name.strip().lower()
+                    subj_key = cls["Subject"].strip().lower()
+                    potential_teachers_data = student_teacher_map.get(s_key, [])
+                    
+                    potential_teachers = []
+                    for t in potential_teachers_data:
+                        # Match if teacher has no expertise listed (fallback), or if their expertise includes this subject
+                        if not t["expertise"] or subj_key in t["expertise"]:
+                            potential_teachers.append(t["name"])
+                    
+                    final_teacher = "Unassigned"
+                    if len(potential_teachers) == 1:
+                        final_teacher = potential_teachers[0]
+                    elif len(potential_teachers) > 1:
+                        final_teacher = ", ".join(potential_teachers)
                 
                 agenda_items.append({
                     "Time": cls["Time"],

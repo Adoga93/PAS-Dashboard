@@ -346,7 +346,8 @@ elif tab == "Registration":
                 for entry in all_subjects_data:
                     s_str = entry['StartTime'].strftime("%I:%M %p")
                     e_str = entry['EndTime'].strftime("%I:%M %p")
-                    class_times_parts.append(f"{entry['Subject']} ({entry['Day'][:3]} {s_str} - {e_str})")
+                    teacher_str = f" [{entry['Teacher']}]" if entry.get('Teacher') and entry['Teacher'] != "Unassigned" else ""
+                    class_times_parts.append(f"{entry['Subject']} ({entry['Day'][:3]} {s_str} - {e_str}){teacher_str}")
                 
                 class_times_str = ", ".join(class_times_parts)
                 
@@ -628,6 +629,8 @@ elif tab == "Admin Dashboard":
                                         def_end = datetime.datetime.strptime(c_data["EndTime"], "%I:%M %p").time()
                                     except:
                                         pass
+                                if c_data.get("AssignedTeacher") in teacher_options:
+                                    def_teacher = c_data["AssignedTeacher"]
                             
                             c1, c2, c3, c4, c5, c6 = st.columns([3, 3, 2, 2, 2, 1])
                             with c1:
@@ -668,7 +671,8 @@ elif tab == "Admin Dashboard":
                         for entry in all_edit_subjects:
                             s_str = entry["StartTime"].strftime("%I:%M %p")
                             e_str = entry["EndTime"].strftime("%I:%M %p")
-                            class_times_parts.append(f"{entry['Subject']} ({entry['Day'][:3]} {s_str} - {e_str})")
+                            teacher_str = f" [{entry['Teacher']}]" if entry.get('Teacher') and entry['Teacher'] != "Unassigned" else ""
+                            class_times_parts.append(f"{entry['Subject']} ({entry['Day'][:3]} {s_str} - {e_str}){teacher_str}")
                             
                         es_times = ", ".join(class_times_parts)
                         
