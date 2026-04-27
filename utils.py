@@ -660,13 +660,22 @@ def get_student_teacher_map(client):
         for _, t_row in df_teachers.iterrows():
             t_name = t_row.get("Teacher Name", "Unknown")
             assigned_raw = str(t_row.get("Assigned Students", ""))
+            expertise_raw = str(t_row.get("Subject Expertise", ""))
+            
             # Split by comma and normalize
             assigned_list = [a.strip().lower() for a in assigned_raw.split(',') if a.strip()]
+            expertise_list = [e.strip().lower() for e in expertise_raw.split(',') if e.strip()]
             
             for s in assigned_list:
                 if s not in student_teacher_map:
                     student_teacher_map[s] = []
-                student_teacher_map[s].append(t_name)
+                
+                # Check for duplicates before appending to handle accidental dupes in Sheet
+                if not any(t["name"] == t_name for t in student_teacher_map[s]):
+                    student_teacher_map[s].append({
+                        "name": t_name, 
+                        "expertise": expertise_list
+                    })
     return student_teacher_map
 
 
@@ -874,9 +883,16 @@ def generate_master_schedule(client, selected_day_full):
             if not cls["Valid"]: continue
             
             if cls["Day"] == selected_day_full:
-                # MATCH TEACHER using Normalized Name
+                # MATCH TEACHER using Normalized Name and Subject Expertise
                 s_key = s_name.strip().lower()
-                potential_teachers = student_teacher_map.get(s_key, [])
+                subj_key = cls["Subject"].strip().lower()
+                potential_teachers_data = student_teacher_map.get(s_key, [])
+                
+                potential_teachers = []
+                for t in potential_teachers_data:
+                    # Match if teacher has no expertise listed (fallback), or if their expertise includes this subject
+                    if not t["expertise"] or subj_key in t["expertise"]:
+                        potential_teachers.append(t["name"])
                 
                 final_teacher = "Unassigned"
                 if len(potential_teachers) == 1:
