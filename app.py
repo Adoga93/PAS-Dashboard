@@ -634,18 +634,18 @@ elif tab == "Admin Dashboard":
                             
                             c1, c2, c3, c4, c5, c6 = st.columns([3, 3, 2, 2, 2, 1])
                             with c1:
-                                sub = st.selectbox(f"Subject {i+1}", standard_subjects, index=standard_subjects.index(def_sub) if def_sub in standard_subjects else 0, key=f"esub_{i}")
+                                sub = st.selectbox(f"Subject {i+1}", standard_subjects, index=standard_subjects.index(def_sub) if def_sub in standard_subjects else 0, key=f"esub_{sel_s_edit}_{i}")
                             with c2:
-                                tcher = st.selectbox(f"Teacher {i+1}", teacher_options, index=teacher_options.index(def_teacher) if def_teacher in teacher_options else 0, key=f"eteach_{i}")
+                                tcher = st.selectbox(f"Teacher {i+1}", teacher_options, index=teacher_options.index(def_teacher) if def_teacher in teacher_options else 0, key=f"eteach_{sel_s_edit}_{i}")
                             with c3:
-                                day = st.selectbox(f"Day {i+1}", day_options, index=day_options.index(def_day) if def_day in day_options else 0, key=f"eday_{i}")
+                                day = st.selectbox(f"Day {i+1}", day_options, index=day_options.index(def_day) if def_day in day_options else 0, key=f"eday_{sel_s_edit}_{i}")
                             with c4:
-                                start_t = st.time_input(f"Start {i+1}", value=def_start, key=f"estart_{i}")
+                                start_t = st.time_input(f"Start {i+1}", value=def_start, key=f"estart_{sel_s_edit}_{i}")
                             with c5:
-                                end_t = st.time_input(f"End {i+1}", value=def_end, key=f"eend_{i}")
+                                end_t = st.time_input(f"End {i+1}", value=def_end, key=f"eend_{sel_s_edit}_{i}")
                             with c6:
                                 st.markdown("<br>", unsafe_allow_html=True)
-                                is_deleted = st.checkbox("🗑️", key=f"edel_{i}")
+                                is_deleted = st.checkbox("🗑️", key=f"edel_{sel_s_edit}_{i}")
                             
                             if not is_deleted:
                                 all_edit_subjects.append({
@@ -755,16 +755,16 @@ elif tab == "Admin Dashboard":
                             is_active = day in parsed_sched
                             col1, col2, col3 = st.columns([1.5, 2, 2])
                             with col1:
-                                is_checked = st.checkbox(day, value=is_active, key=f"et_d_{day}")
+                                is_checked = st.checkbox(day, value=is_active, key=f"et_d_{sel_t_edit}_{day}")
                             
                             if is_checked:
                                 # Default times or parsed times
                                 def_start, def_end = parsed_sched.get(day, (datetime.time(9,0), datetime.time(17,0)))
                                 
                                 with col2:
-                                    start_time = st.time_input(f"Start ({day})", value=def_start, key=f"et_s_{day}")
+                                    start_time = st.time_input(f"Start ({day})", value=def_start, key=f"et_s_{sel_t_edit}_{day}")
                                 with col3:
-                                    end_time = st.time_input(f"End ({day})", value=def_end, key=f"et_e_{day}")
+                                    end_time = st.time_input(f"End ({day})", value=def_end, key=f"et_e_{sel_t_edit}_{day}")
                                 
                                 t_start = start_time.strftime("%I:%M %p")
                                 t_end = end_time.strftime("%I:%M %p")
