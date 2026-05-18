@@ -1164,15 +1164,7 @@ def schedule_class(client, teacher_name, student_names, subject, time_str, durat
             duration_mins = duration_map.get(duration_str, 60)
             end_dt = start_dt + datetime.timedelta(minutes=duration_mins)
             
-            # 2. Auto-generate Meet Link if blank
-            if not meeting_link or not meeting_link.strip():
-                generated_link = generate_meet_link(subject, start_dt, end_dt)
-                if generated_link:
-                    meeting_link = generated_link
-                else:
-                    return False, "Failed to generate Google Meet link. Have you authorized the app yet?", None
-
-            # 3. Fetch Teacher Email
+            # 2. Fetch Teacher Email
             t_email = ""
             df_t = get_teacher_data(client)
             if not df_t.empty and "Teacher Name" in df_t.columns and "Email" in df_t.columns:
@@ -1182,30 +1174,37 @@ def schedule_class(client, teacher_name, student_names, subject, time_str, durat
             if not t_email:
                  return False, f"Missing Email for Teacher: {teacher_name}", None
 
-            # 4. Fetch Student Emails & Insert Rows
+            # 3. Fetch Student Emails
             df_s = get_students_data(client)
-            
-            # Prepare rows to append efficiently
-            rows_to_add = []
             student_emails = []
-            
             for s_name in student_names:
                 s_email = ""
                 if not df_s.empty and "Student Name" in df_s.columns and "Email" in df_s.columns:
                     matches = df_s[df_s["Student Name"] == s_name]
                     if not matches.empty: s_email = matches.iloc[0]["Email"]
-                
                 if s_email:
                     student_emails.append((s_name, s_email))
-                
-                # Append row for this student
+            
+            if not student_emails:
+                return False, "No valid students found to schedule.", None
+
+            # 4. Auto-generate Meet Link if blank (with attendees to skip lobby)
+            if not meeting_link or not meeting_link.strip():
+                # Compile list of all emails for the calendar invite
+                attendees = [t_email] + [email for name, email in student_emails]
+                generated_link = generate_meet_link(subject, start_dt, end_dt, attendees)
+                if generated_link:
+                    meeting_link = generated_link
+                else:
+                    return False, "Failed to generate Google Meet link. Have you authorized the app yet?", None
+                    
+            # 5. Insert Rows
+            rows_to_add = []
+            for s_name, s_email in student_emails:
                 rows_to_add.append([
                     session_id, teacher_name, s_name, subject, str(time_str), 
                     meeting_link, "Scheduled", code, "", "", ""
                 ])
-                
-            if not rows_to_add:
-                return False, "No valid students found to schedule.", None
                 
             ws.append_rows(rows_to_add)
             
@@ -1542,9 +1541,10 @@ def update_teacher(client, original_name, updated_data):
 # --- GOOGLE MEET API (OAUTH 2.0) ---
 SCOPES = ['https://www.googleapis.com/auth/calendar.events']
 
-def get_calendar_service():
+def generate_meet_link(subject, start_dt, end_dt, attendees_emails=None):
     """
-    Authenticates with Google Calendar API using OAuth 2.0.
+    Creates a Calendar event with a Hangouts Meet link.
+    start_dt and end_dt must be datetime objects.
     """
     # Helper to find secret either at root or nested under gcp_service_account
     def get_oauth_secret(key_name):
@@ -1580,17 +1580,11 @@ def get_calendar_service():
             token.write(creds.to_json())
     
     try:
-        return build('calendar', 'v3', credentials=creds)
+        service = build('calendar', 'v3', credentials=creds)
     except Exception as e:
         st.error(f"Error building Calendar service: {e}")
         return None
-
-def generate_meet_link(subject, start_dt, end_dt):
-    """
-    Creates a Calendar event with a Hangouts Meet link.
-    start_dt and end_dt must be datetime objects.
-    """
-    service = get_calendar_service()
+    
     if not service:
         return None
     
@@ -1618,8 +1612,11 @@ def generate_meet_link(subject, start_dt, end_dt):
         }
     }
     
+    if attendees_emails:
+        event['attendees'] = [{'email': email} for email in attendees_emails]
+        
     try:
-        event = service.events().insert(calendarId='primary', body=event, conferenceDataVersion=1).execute()
+        event = service.events().insert(calendarId='primary', body=event, conferenceDataVersion=1, sendUpdates='none').execute()
         meet_link = event.get('hangoutLink')
         return meet_link
     except Exception as e:
