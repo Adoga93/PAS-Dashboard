@@ -1546,14 +1546,23 @@ def get_calendar_service():
     """
     Authenticates with Google Calendar API using OAuth 2.0.
     """
-    # Create files dynamically from Streamlit secrets if running in cloud
-    if "GOOGLE_OAUTH_CLIENT_SECRET" in st.secrets and not os.path.exists("client_secret.json"):
+    # Helper to find secret either at root or nested under gcp_service_account
+    def get_oauth_secret(key_name):
+        if key_name in st.secrets:
+            return st.secrets[key_name]
+        elif "gcp_service_account" in st.secrets and key_name in st.secrets["gcp_service_account"]:
+            return st.secrets["gcp_service_account"][key_name]
+        return None
+
+    client_secret_data = get_oauth_secret("GOOGLE_OAUTH_CLIENT_SECRET")
+    if client_secret_data and not os.path.exists("client_secret.json"):
         with open("client_secret.json", "w") as f:
-            f.write(st.secrets["GOOGLE_OAUTH_CLIENT_SECRET"])
+            f.write(client_secret_data)
             
-    if "GOOGLE_OAUTH_TOKEN" in st.secrets and not os.path.exists("token.json"):
+    token_data = get_oauth_secret("GOOGLE_OAUTH_TOKEN")
+    if token_data and not os.path.exists("token.json"):
         with open("token.json", "w") as f:
-            f.write(st.secrets["GOOGLE_OAUTH_TOKEN"])
+            f.write(token_data)
             
     creds = None
     if os.path.exists('token.json'):
