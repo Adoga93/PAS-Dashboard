@@ -1545,8 +1545,16 @@ SCOPES = ['https://www.googleapis.com/auth/calendar.events']
 def get_calendar_service():
     """
     Authenticates with Google Calendar API using OAuth 2.0.
-    Generates token.json on first local run.
     """
+    # Create files dynamically from Streamlit secrets if running in cloud
+    if "GOOGLE_OAUTH_CLIENT_SECRET" in st.secrets and not os.path.exists("client_secret.json"):
+        with open("client_secret.json", "w") as f:
+            f.write(st.secrets["GOOGLE_OAUTH_CLIENT_SECRET"])
+            
+    if "GOOGLE_OAUTH_TOKEN" in st.secrets and not os.path.exists("token.json"):
+        with open("token.json", "w") as f:
+            f.write(st.secrets["GOOGLE_OAUTH_TOKEN"])
+            
     creds = None
     if os.path.exists('token.json'):
         creds = Credentials.from_authorized_user_file('token.json', SCOPES)
