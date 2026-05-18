@@ -17,29 +17,23 @@ client = utils.get_google_sheet_client()
 if not client:
     st.warning("⚠️ Running in Mock Mode. `credentials.json` not found or invalid.")
 
-# --- MAGIC LINK HANDLER (AUTO-CLOCK-IN) ---
-# Check query params for action=clock_in
+# --- MAGIC LINK HANDLER (AUTO-CLOCK-IN & SURVEY) ---
+# Check query params for action=clock_in or clock_out
 query_params = st.query_params
-if "action" in query_params and query_params["action"] == "clock_in":
+action = query_params.get("action")
+
+if action == "clock_in":
     session_id = query_params.get("session_id")
     role = query_params.get("role")
+    student_name = query_params.get("student_name")
     
     st.title("🚀 Join Class")
     
     if session_id and role:
-        # Auto Clock-in
-        # For security in a real app, we'd verify a signature or token.
-        # Here we trust the link for simplicity as requested.
-        
-        # We need to map role -> Name. But name isn't in link?
-        # Correction: clock_in needs Code or ID?
-        # utils.clock_in uses CODE. But we have ID.
-        # We need a new util: clock_in_by_id(session_id, role)
-        
-        success, msg, meeting_link = utils.clock_in_by_id(client, session_id, role)
+        success, msg, meeting_link = utils.clock_in_by_id(client, session_id, role, student_name)
         
         if success:
-            st.balloons() # Special auto-login celebration
+            st.balloons()
             st.success(f"✅ Welcome {role}! You are Clocked In.")
             st.markdown(f"### [👉 CLICK TO JOIN MEETING]({meeting_link})")
             st.caption("You may close this tab after joining.")
@@ -49,6 +43,59 @@ if "action" in query_params and query_params["action"] == "clock_in":
         st.error("Invalid Link.")
     
     st.stop() # Stop rendering the rest of the app
+
+elif action == "clock_out":
+    session_id = query_params.get("session_id")
+    role = query_params.get("role")
+    
+    if role != "Teacher":
+        st.error("Only teachers can end the class and submit the survey.")
+        st.stop()
+        
+    st.title("📝 End Class & Survey")
+    
+    # Check if already completed
+    sessions_df = utils.get_sessions_data(client)
+    if not sessions_df.empty:
+        matches = sessions_df[sessions_df["Session ID"] == session_id]
+        if not matches.empty:
+            status = matches.iloc[0].get("Status")
+            if status == "Completed":
+                st.info("This class has already been ended and the survey submitted.")
+                st.stop()
+            
+            subject = matches.iloc[0].get("Subject", "Unknown")
+            
+            with st.form("end_class_survey_form"):
+                st.write(f"**Session ID:** {session_id}")
+                st.write(f"**Subject:** {subject}")
+                
+                topic = st.text_input("Topic Taught")
+                outcome = st.text_input("Learning Outcome")
+                behaviour = st.selectbox("Learner's Behaviour", ["Excellent", "Good", "Fair", "Poor"])
+                participation = st.selectbox("Learner's Participation", ["High", "Medium", "Low"])
+                assignment_given = st.radio("Assignment Given?", ["Yes", "No"], horizontal=True)
+                last_assignment = st.radio("Was last assignment done?", ["Yes", "No", "N/A"], horizontal=True)
+                
+                if st.form_submit_button("Submit Survey & End Class"):
+                    survey_data = {
+                        "Topic Taught": topic,
+                        "Learning Outcome": outcome,
+                        "Learner's Behaviour": behaviour,
+                        "Learner's Participation": participation,
+                        "Assignment Given": assignment_given,
+                        "Last Assignment Done": last_assignment
+                    }
+                    
+                    success, msg = utils.submit_survey(client, session_id, survey_data)
+                    if success:
+                        st.balloons()
+                        st.success("✅ Survey submitted and class ended! You may close this tab.")
+                    else:
+                        st.error(f"❌ Error submitting survey: {msg}")
+    else:
+        st.error("Could not load sessions.")
+    st.stop()
 
 # --- SIDEBAR ---
 st.sidebar.title("PAS Tutors")
@@ -224,9 +271,19 @@ elif tab == "Teacher Tab":
             ]
             
             if not my_classes.empty:
-                st.write(f"You have {len(my_classes)} upcoming/active classes.")
+                # Group by Session ID to handle multi-student classes
+                grouped_classes = my_classes.groupby("Session ID", as_index=False).agg({
+                    "Subject": "first",
+                    "Student Name": lambda x: ", ".join(x.astype(str)),
+                    "Scheduled Time": "first",
+                    "Status": "first",
+                    "Attendance Code": "first",
+                    "Meeting Link": "first"
+                })
                 
-                for index, row in my_classes.iterrows():
+                st.write(f"You have {len(grouped_classes)} upcoming/active classes.")
+                
+                for index, row in grouped_classes.iterrows():
                     with st.container():
                         st.info(f"**{row['Subject']}** with {row['Student Name']} @ {row['Scheduled Time']}")
                         status = row['Status']
@@ -237,19 +294,18 @@ elif tab == "Teacher Tab":
                             st.write(f"Status: **{status}**")
                         
                         with c2:
-                            if status == "Scheduled" or status == "In-Progress":
-                                st.markdown(f"### 🔑 CODE: `{row['Attendance Code']}`")
-                                if str(row.get("Meeting Link", "")):
-                                     st.markdown(f"[Join Meeting]({row['Meeting Link']})")
+                            if status in ["Scheduled", "In-Progress"]:
+                                st.markdown(f"### 🔑 CODE: `{row.get('Attendance Code', 'N/A')}`")
+                                meet_link = row.get("Meeting Link", "")
+                                if meet_link and str(meet_link).strip():
+                                     st.markdown(f"[Join Meeting]({meet_link})")
                         
                         with c3:
-                            if status == "In-Progress" or status == "Scheduled":
-                                if st.button(f"🛑 End Class", key=f"end_{s_id}"):
-                                    if utils.end_class_v2(client, s_id):
-                                        st.success("Class Ended & Logged!")
-                                        st.rerun()
-                                    else:
-                                        st.error("Error ending class.")
+                            if status in ["Scheduled", "In-Progress"]:
+                                # Since teachers now use the Magic Link survey, we provide the link here too
+                                # just in case they don't have their email handy.
+                                magic_link_end = f"{utils.BASE_APP_URL}/?action=clock_out&session_id={s_id}&role=Teacher"
+                                st.markdown(f"**[📝 END CLASS & SURVEY]({magic_link_end})**")
                         st.markdown("---")
             else:
                 st.info("No scheduled classes found. Ask Admin to schedule one.")
@@ -900,7 +956,7 @@ elif tab == "Admin Dashboard":
             
             with st.form("schedule_form"):
                 sc_teacher = st.selectbox("Teacher", teachers_list)
-                sc_student = st.selectbox("Student", students_list)
+                sc_students = st.multiselect("Students", students_list)
                 
                 # Subject Dropdown (Standard + Other)
                 subject_opts = utils.STANDARD_SUBJECTS
@@ -908,17 +964,21 @@ elif tab == "Admin Dashboard":
                 if sc_subject == "Other":
                     sc_subject = st.text_input("Enter Subject")
                 
-                sc_link = st.text_input("Meeting Link (Google Meet/Zoom)")
+                sc_link = st.text_input("Meeting Link (Leave blank to auto-generate Google Meet)")
                 
-                c1, c2 = st.columns(2)
+                c1, c2, c3 = st.columns(3)
                 sc_date = c1.date_input("Date")
-                sc_time = c2.time_input("Time")
+                sc_time = c2.time_input("Start Time")
+                sc_duration = c3.selectbox("Duration", ["1 Hour", "30 Mins", "45 Mins", "1.5 Hours", "2 Hours"])
                 
                 if st.form_submit_button("Schedule & Send Invite"):
-                    dt_str = f"{sc_date} {sc_time}"
-                    
-                    # Unpack 3 values now: Success, Msg, SessionID
-                    success, msg, session_id_res = utils.schedule_class(client, sc_teacher, sc_student, sc_subject, dt_str, sc_link)
+                    if not sc_students:
+                        st.error("Please select at least one student.")
+                    else:
+                        dt_str = f"{sc_date} {sc_time}"
+                        
+                        # Unpack 3 values now: Success, Msg, SessionID
+                        success, msg, session_id_res = utils.schedule_class(client, sc_teacher, sc_students, sc_subject, dt_str, sc_duration, sc_link)
                     
                     if success:
                         if "Email Failed" in msg:

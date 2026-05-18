@@ -4,3 +4,6 @@ pandas
 plotly
 oauth2client
 func_timeout
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib

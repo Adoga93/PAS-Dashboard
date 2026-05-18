@@ -6,6 +6,12 @@ import datetime
 import json
 import re
 import functools
+import os
+import uuid
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
 
 
 # Global Subject Options
@@ -946,18 +952,18 @@ from email.mime.multipart import MIMEMultipart
 # Try to get from secrets, else use provided fallback
 try:
     SENDER_EMAIL = st.secrets.get("EMAIL_USER", "Pinnacleassistance1@gmail.com")
-    SENDER_PASSWORD = st.secrets.get("EMAIL_PASSWORD", "Lanadel040924") 
+    SENDER_PASSWORD = st.secrets.get("EMAIL_PASSWORD", "fjruhliqivocbnra") 
     BASE_APP_URL = st.secrets.get("APP_URL", "https://pas-dashboard-gcvkbpip4geh7cchnpgqya.streamlit.app")
 except FileNotFoundError:
     # If no secrets.toml exists (local dev), use defaults
     SENDER_EMAIL = "Pinnacleassistance1@gmail.com"
-    SENDER_PASSWORD = "Lanadel040924"
-    BASE_APP_URL = "http://localhost:8501" # Default to localhost if no secrets
+    SENDER_PASSWORD = "fjruhliqivocbnra"
+    BASE_APP_URL = "https://pas-dashboard-gcvkbpip4geh7cchnpgqya.streamlit.app" # Default to localhost if no secrets
 except Exception:
     # Catch StreamlitSecretNotFoundError (which might be ImportError or other)
     SENDER_EMAIL = "Pinnacleassistance1@gmail.com"
-    SENDER_PASSWORD = "Lanadel040924"
-    BASE_APP_URL = "http://localhost:8501"
+    SENDER_PASSWORD = "fjruhliqivocbnra"
+    BASE_APP_URL = "https://pas-dashboard-gcvkbpip4geh7cchnpgqya.streamlit.app"
 
 def send_email_invite(teacher_email, student_email, subject, time_str, session_id, meeting_link):
     """
@@ -1025,6 +1031,88 @@ def send_email_invite(teacher_email, student_email, subject, time_str, session_i
         print(f"Email Error: {e}")
         return False, str(e)
 
+def send_multi_email_invite(teacher_email, student_emails, subject, time_str, session_id, meeting_link):
+    """
+    Sends email with MAGIC LINKS to Teacher and Multiple Students.
+    Teacher receives both Clock In and Clock Out (Survey) links.
+    student_emails: list of tuples [(s_name, s_email), ...]
+    """
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+
+    try:
+        # Connect to Server once
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(SENDER_EMAIL, SENDER_PASSWORD)
+        
+        # 1. Send to Teacher
+        msg_t = MIMEMultipart()
+        msg_t['From'] = SENDER_EMAIL
+        msg_t['To'] = teacher_email
+        msg_t['Subject'] = f"Class Invitation: {subject} @ {time_str}"
+        
+        magic_link_t = f"{BASE_APP_URL}/?action=clock_in&session_id={session_id}&role=Teacher"
+        magic_link_end = f"{BASE_APP_URL}/?action=clock_out&session_id={session_id}&role=Teacher"
+        
+        body_t = f"""
+        <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+            <h2 style="color: #4CAF50;">PAS Tutors Class Invitation</h2>
+            <p><strong>Subject:</strong> {subject}</p>
+            <p><strong>Time:</strong> {time_str}</p>
+            <p><strong>Meeting Link:</strong> <a href="{meeting_link}">{meeting_link}</a></p>
+            <br>
+            <div style="display: flex; gap: 10px;">
+                <a href="{magic_link_t}" style="background-color: #4CAF50; color: white; padding: 15px 32px; text-align: center; text-decoration: none; display: inline-block; font-size: 16px; border-radius: 5px; margin-right: 10px;">
+                    ▶️ JOIN CLASS
+                </a>
+                <a href="{magic_link_end}" style="background-color: #f44336; color: white; padding: 15px 32px; text-align: center; text-decoration: none; display: inline-block; font-size: 16px; border-radius: 5px;">
+                    ⏹️ END CLASS & SURVEY
+                </a>
+            </div>
+            <p style="color: #666; font-size: 12px; margin-top: 20px;">
+                <b>Instructions:</b><br>
+                1. Click 'JOIN CLASS' exactly when you enter the Google Meet. This records your log-in time.<br>
+                2. Click 'END CLASS & SURVEY' when the class finishes. This records the completion time and opens the mandatory survey.
+            </p>
+        </div>
+        """
+        msg_t.attach(MIMEText(body_t, 'html'))
+        server.sendmail(SENDER_EMAIL, teacher_email, msg_t.as_string())
+        
+        # 2. Send to Students
+        for s_name, s_email in student_emails:
+            msg_s = MIMEMultipart()
+            msg_s['From'] = SENDER_EMAIL
+            msg_s['To'] = s_email
+            msg_s['Subject'] = f"Class Invitation: {subject} @ {time_str}"
+            
+            magic_link_s = f"{BASE_APP_URL}/?action=clock_in&session_id={session_id}&role=Student&student_name={s_name}"
+            
+            body_s = f"""
+            <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+                <h2 style="color: #2196F3;">PAS Tutors Class Invitation</h2>
+                <p><strong>Subject:</strong> {subject}</p>
+                <p><strong>Time:</strong> {time_str}</p>
+                <p><strong>Meeting Link:</strong> <a href="{meeting_link}">{meeting_link}</a></p>
+                <br>
+                <a href="{magic_link_s}" style="background-color: #2196F3; color: white; padding: 15px 32px; text-align: center; text-decoration: none; display: inline-block; font-size: 16px; border-radius: 5px;">
+                    ▶️ JOIN CLASS
+                </a>
+                <p style="color: #666; font-size: 12px; margin-top: 20px;">Clicking this link will automatically clock you in and open the meeting.</p>
+            </div>
+            """
+            msg_s.attach(MIMEText(body_s, 'html'))
+            server.sendmail(SENDER_EMAIL, s_email, msg_s.as_string())
+        
+        server.quit()
+        return True, "Invites Sent Successfully"
+    except Exception as e:
+        print(f"Email Error: {e}")
+        return False, str(e)
+
+
 @st.cache_data(ttl=300)
 def get_sessions_data(_client):
     sheet = get_sheet_by_id(_client)
@@ -1050,7 +1138,7 @@ def get_sessions_data(_client):
             
     return pd.DataFrame()
 
-def schedule_class(client, teacher_name, student_name, subject, time_str, meeting_link):
+def schedule_class(client, teacher_name, student_names, subject, time_str, duration_str, meeting_link):
     sheet = get_sheet_by_id(client)
     if sheet:
         try:
@@ -1060,39 +1148,80 @@ def schedule_class(client, teacher_name, student_name, subject, time_str, meetin
             ws = sheet.worksheet("Sessions")
             session_id = str(uuid.uuid4())
             
-            # Generate Code (Still needed for manual backup?) -> Kept as fallback
             code = str(random.randint(100000, 999999))
             
-            # 1. Fetch Emails
+            # 1. Parse Time and Duration for Google Meet
+            try:
+                # time_str is from f"{sc_date} {sc_time}" e.g., '2026-05-16 09:00:00'
+                start_dt = datetime.datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                # Handle cases where seconds might be omitted
+                start_dt = datetime.datetime.strptime(time_str, "%Y-%m-%d %H:%M")
+                
+            duration_map = {
+                "30 Mins": 30, "45 Mins": 45, "1 Hour": 60, "1.5 Hours": 90, "2 Hours": 120
+            }
+            duration_mins = duration_map.get(duration_str, 60)
+            end_dt = start_dt + datetime.timedelta(minutes=duration_mins)
+            
+            # 2. Auto-generate Meet Link if blank
+            if not meeting_link or not meeting_link.strip():
+                generated_link = generate_meet_link(subject, start_dt, end_dt)
+                if generated_link:
+                    meeting_link = generated_link
+                else:
+                    return False, "Failed to generate Google Meet link. Have you authorized the app yet?", None
+
+            # 3. Fetch Teacher Email
             t_email = ""
             df_t = get_teacher_data(client)
             if not df_t.empty and "Teacher Name" in df_t.columns and "Email" in df_t.columns:
                 matches = df_t[df_t["Teacher Name"] == teacher_name]
                 if not matches.empty: t_email = matches.iloc[0]["Email"]
 
-            s_email = ""
-            df_s = get_students_data(client)
-            if not df_s.empty and "Student Name" in df_s.columns and "Email" in df_s.columns:
-                matches = df_s[df_s["Student Name"] == student_name]
-                if not matches.empty: s_email = matches.iloc[0]["Email"]
-            
-            if not t_email or not s_email:
-                 return False, f"Missing Email! Teacher: {t_email}, Student: {s_email}"
+            if not t_email:
+                 return False, f"Missing Email for Teacher: {teacher_name}", None
 
-            # 2. Add Row
-            ws.append_row([
-                session_id, teacher_name, student_name, subject, str(time_str), 
-                meeting_link, "Scheduled", code, "", "", ""
-            ])
+            # 4. Fetch Student Emails & Insert Rows
+            df_s = get_students_data(client)
             
-            # 3. Send Email with Magic Link
-            email_success, email_msg = send_email_invite(t_email, s_email, subject, time_str, session_id, meeting_link)
+            # Prepare rows to append efficiently
+            rows_to_add = []
+            student_emails = []
             
+            for s_name in student_names:
+                s_email = ""
+                if not df_s.empty and "Student Name" in df_s.columns and "Email" in df_s.columns:
+                    matches = df_s[df_s["Student Name"] == s_name]
+                    if not matches.empty: s_email = matches.iloc[0]["Email"]
+                
+                if s_email:
+                    student_emails.append((s_name, s_email))
+                
+                # Append row for this student
+                rows_to_add.append([
+                    session_id, teacher_name, s_name, subject, str(time_str), 
+                    meeting_link, "Scheduled", code, "", "", ""
+                ])
+                
+            if not rows_to_add:
+                return False, "No valid students found to schedule.", None
+                
+            ws.append_rows(rows_to_add)
+            
+            # 5. Send Emails
+            email_errors = []
+            # Send ONE email to teacher containing clock-in and clock-out links
+            # We will modify send_email_invite slightly to just take lists or call it in a loop
+            # Wait, currently send_email_invite sends to 1 teacher and 1 student. 
+            # We will call a modified or new function for all students.
+            
+            email_success, email_msg = send_multi_email_invite(t_email, student_emails, subject, time_str, session_id, meeting_link)
+            
+            get_sessions_data.clear()
             if email_success:
-                get_sessions_data.clear()
-                return True, "Invites Sent Successfully!", session_id
+                return True, "Class Scheduled & Invites Sent Successfully!", session_id
             else:
-                get_sessions_data.clear()
                 return True, f"Class Scheduled but Email Failed: {email_msg}", session_id
             
         except Exception as e:
@@ -1100,7 +1229,7 @@ def schedule_class(client, teacher_name, student_name, subject, time_str, meetin
             return False, str(e), None
     return False, "No Sheet", None
 
-def clock_in_by_id(client, session_id, role):
+def clock_in_by_id(client, session_id, role, student_name=None):
     """
     Magic Link Clock-in using Session ID.
     Returns: Success (Bool), Message (Str), Meeting Link (Str)
@@ -1109,29 +1238,38 @@ def clock_in_by_id(client, session_id, role):
     if sheet:
         try:
             ws = sheet.worksheet("Sessions")
-            cell = ws.find(session_id)
-            if cell:
-                row = cell.row
-                
-                # Verify Status
-                status = ws.cell(row, 7).value # Col 7: Status
-                if status not in ["Scheduled", "In-Progress"]:
-                     return False, "Class already completed.", ""
-
+            cells = ws.findall(session_id)
+            if cells:
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                meeting_link = ws.cell(row, 6).value # Col 6: Link
+                meeting_link = ""
+                updated_any = False
                 
-                # Update Time
-                if role == "Teacher":
-                    ws.update_cell(row, 9, now) # Col 9: Teacher Join
-                elif role == "Student":
-                    ws.update_cell(row, 10, now) # Col 10: Student Join
+                for cell in cells:
+                    row = cell.row
+                    # Verify Status
+                    status = ws.cell(row, 7).value # Col 7: Status
+                    if status not in ["Scheduled", "In-Progress"]:
+                        continue # Skip completed rows
+                    
+                    meeting_link = ws.cell(row, 6).value # Col 6: Link
+                    
+                    if role == "Teacher":
+                        ws.update_cell(row, 9, now) # Col 9: Teacher Join
+                        ws.update_cell(row, 7, "In-Progress")
+                        updated_any = True
+                    elif role == "Student":
+                        # Only update if student name matches
+                        row_student = ws.cell(row, 3).value # Col 3: Student Name
+                        if not student_name or row_student.lower() == student_name.lower():
+                            ws.update_cell(row, 10, now) # Col 10: Student Join
+                            ws.update_cell(row, 7, "In-Progress")
+                            updated_any = True
                 
-                # Update Status to In-Progress (Session Active)
-                ws.update_cell(row, 7, "In-Progress")
-
-                get_sessions_data.clear()
-                return True, "Clocked In Successfully!", meeting_link
+                if updated_any:
+                    get_sessions_data.clear()
+                    return True, "Clocked In Successfully!", meeting_link
+                else:
+                    return False, "Could not find a valid class to clock in to (it may be completed or student name mismatch).", ""
             else:
                 return False, "Session Not Found", ""
         except Exception as e:
@@ -1400,3 +1538,139 @@ def update_teacher(client, original_name, updated_data):
             return False, str(e)
     return False, "No Sheet"
 
+
+# --- GOOGLE MEET API (OAUTH 2.0) ---
+SCOPES = ['https://www.googleapis.com/auth/calendar.events']
+
+def get_calendar_service():
+    """
+    Authenticates with Google Calendar API using OAuth 2.0.
+    Generates token.json on first local run.
+    """
+    creds = None
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            if not os.path.exists('client_secret.json'):
+                st.error("Missing client_secret.json for Google Meet integration.")
+                return None
+            flow = InstalledAppFlow.from_client_secrets_file('client_secret.json', SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open('token.json', 'w') as token:
+            token.write(creds.to_json())
+    
+    try:
+        return build('calendar', 'v3', credentials=creds)
+    except Exception as e:
+        st.error(f"Error building Calendar service: {e}")
+        return None
+
+def generate_meet_link(subject, start_dt, end_dt):
+    """
+    Creates a Calendar event with a Hangouts Meet link.
+    start_dt and end_dt must be datetime objects.
+    """
+    service = get_calendar_service()
+    if not service:
+        return None
+    
+    # Format for Google Calendar (RFC3339)
+    # Using local timezone (assuming system time is correct for the user)
+    # The user has NGN currency, so Africa/Lagos is likely, but using local ISO format is safer.
+    start_str = start_dt.isoformat()
+    end_str = end_dt.isoformat()
+    
+    event = {
+        'summary': f"PAS Class: {subject}",
+        'start': {
+            'dateTime': start_str,
+            'timeZone': 'Africa/Lagos', 
+        },
+        'end': {
+            'dateTime': end_str,
+            'timeZone': 'Africa/Lagos',
+        },
+        'conferenceData': {
+            'createRequest': {
+                'requestId': str(uuid.uuid4()),
+                'conferenceSolutionKey': {'type': 'hangoutsMeet'}
+            }
+        }
+    }
+    
+    try:
+        event = service.events().insert(calendarId='primary', body=event, conferenceDataVersion=1).execute()
+        meet_link = event.get('hangoutLink')
+        return meet_link
+    except Exception as e:
+        print(f"Error creating Meet link: {e}")
+        st.error(f"Error creating Google Meet link: {e}")
+        return None
+def submit_survey(client, session_id, survey_data):
+    """
+    Submits the end-of-class survey, updates Sessions, and adds a legacy review for billing.
+    """
+    sheet = get_sheet_by_id(client)
+    if not sheet: return False, "No Sheet"
+    
+    try:
+        # 1. Update Sessions Sheet (Close the class)
+        ws_sessions = sheet.worksheet("Sessions")
+        cells = ws_sessions.findall(session_id)
+        if not cells:
+            return False, "Session not found."
+            
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        teacher_name = ""
+        students = []
+        subject = ""
+        
+        for cell in cells:
+            row = cell.row
+            ws_sessions.update_cell(row, 7, "Completed") # Col 7: Status
+            ws_sessions.update_cell(row, 11, now) # Col 11: Actual End
+            
+            if not teacher_name:
+                teacher_name = ws_sessions.cell(row, 2).value
+                subject = ws_sessions.cell(row, 4).value
+            
+            s_name = ws_sessions.cell(row, 3).value
+            if s_name: students.append(s_name)
+            
+        get_sessions_data.clear()
+        
+        # 2. Add to Surveys Sheet
+        ws_list = sheet.worksheets()
+        ws_names = [w.title for w in ws_list]
+        if "Surveys" not in ws_names:
+            cols = ["Timestamp", "Session ID", "Teacher", "Subject", "Students", "Topic Taught", "Learning Outcome", "Learner's Behaviour", "Learner's Participation", "Assignment Given", "Last Assignment Done"]
+            ws_surveys = sheet.add_worksheet(title="Surveys", rows="1000", cols="20")
+            ws_surveys.append_row(cols)
+        else:
+            ws_surveys = sheet.worksheet("Surveys")
+            
+        students_str = ", ".join(students)
+        
+        row_data = [
+            now, session_id, teacher_name, subject, students_str,
+            survey_data.get("Topic Taught", ""),
+            survey_data.get("Learning Outcome", ""),
+            survey_data.get("Learner's Behaviour", ""),
+            survey_data.get("Learner's Participation", ""),
+            survey_data.get("Assignment Given", ""),
+            survey_data.get("Last Assignment Done", "")
+        ]
+        ws_surveys.append_row(row_data)
+        
+        # 3. Add to Legacy Reviews Sheet (for billing)
+        # We add one review per student so calculate_teacher_pay counts each student's class
+        topic_taught = survey_data.get("Topic Taught", "")
+        for s_name in students:
+            add_review(client, teacher_name, s_name, f"Class Completed via Survey - {subject} ({topic_taught})")
+            
+        return True, "Success"
+    except Exception as e:
+        return False, str(e)
