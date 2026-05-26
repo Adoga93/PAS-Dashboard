@@ -1555,12 +1555,12 @@ def generate_meet_link(subject, start_dt, end_dt, attendees_emails=None):
         return None
 
     client_secret_data = get_oauth_secret("GOOGLE_OAUTH_CLIENT_SECRET")
-    if client_secret_data and not os.path.exists("client_secret.json"):
+    if client_secret_data:
         with open("client_secret.json", "w") as f:
             f.write(client_secret_data)
             
     token_data = get_oauth_secret("GOOGLE_OAUTH_TOKEN")
-    if token_data and not os.path.exists("token.json"):
+    if token_data:
         with open("token.json", "w") as f:
             f.write(token_data)
             
