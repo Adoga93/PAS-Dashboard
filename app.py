@@ -2,9 +2,22 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import utils
+import importlib
+try:
+    importlib.reload(utils)
+except Exception:
+    pass
 import time
 import datetime
+import urllib.parse
 
+def get_teacher_portal_link(teacher_name, base_url=None):
+    if hasattr(utils, "generate_teacher_portal_link"):
+        return utils.generate_teacher_portal_link(teacher_name, base_url)
+    base = base_url or getattr(utils, "BASE_APP_URL", "https://pas-dashboard-gcvkbpip4geh7cchnpgqya.streamlit.app")
+    base = base.rstrip('/')
+    encoded = urllib.parse.quote_plus(str(teacher_name).strip())
+    return f"{base}/?portal=teacher&t={encoded}"
 
 st.set_page_config(page_title="PAS Tutors Dashboard", layout="wide")
 
@@ -969,7 +982,7 @@ elif tab == "Admin Dashboard":
                 if sel_t_edit and not df_teachers_edit.empty:
                     curr_t = df_teachers_edit[df_teachers_edit["Teacher Name"] == sel_t_edit].iloc[0]
                     
-                    t_portal_link = utils.generate_teacher_portal_link(sel_t_edit)
+                    t_portal_link = get_teacher_portal_link(sel_t_edit)
                     st.info(f"🔗 **Dedicated Portal Link for {sel_t_edit}:**")
                     st.code(t_portal_link, language="text")
                     st.caption("Send this link to the teacher. They will only see their assigned students and cannot access the admin dashboard.")
@@ -1160,7 +1173,7 @@ elif tab == "Admin Dashboard":
                 for _, tr in df_t_overview.iterrows():
                     tn = tr.get("Teacher Name", "")
                     assigned = tr.get("Assigned Students", "")
-                    link = utils.generate_teacher_portal_link(tn)
+                    link = get_teacher_portal_link(tn)
                     portal_records.append({
                         "Teacher Name": tn,
                         "Assigned Students": assigned,
