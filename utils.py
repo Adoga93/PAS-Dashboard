@@ -8,6 +8,7 @@ import re
 import functools
 import os
 import uuid
+import urllib.parse
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
@@ -1688,3 +1689,163 @@ def submit_survey(client, session_id, survey_data):
         return True, "Success"
     except Exception as e:
         return False, str(e)
+
+
+# ==========================================
+# TEACHER PORTAL & WEEKLY PLANS HELPERS
+# ==========================================
+
+def get_current_week_range(target_date=None):
+    """
+    Returns string formatted as: 'Mon, Sep 08 - Sun, Sep 14, 2026'
+    """
+    if target_date is None:
+        target_date = datetime.date.today()
+    monday = target_date - datetime.timedelta(days=target_date.weekday())
+    sunday = monday + datetime.timedelta(days=6)
+    return f"{monday.strftime('%b %d')} - {sunday.strftime('%b %d, %Y')}"
+
+def generate_teacher_portal_link(teacher_name, base_url=None):
+    """
+    Generates direct portal link for a teacher.
+    """
+    base = base_url or BASE_APP_URL
+    base = base.rstrip('/')
+    encoded_name = urllib.parse.quote_plus(str(teacher_name).strip())
+    return f"{base}/?portal=teacher&t={encoded_name}"
+
+@retry_on_quota
+def get_weekly_plans_data(_client):
+    """
+    Fetches all weekly confirmation and lesson plan records from 'Weekly_Plans' tab.
+    """
+    sheet = get_sheet_by_id(_client)
+    if sheet:
+        try:
+            ws_list = sheet.worksheets()
+            ws_names = [w.title for w in ws_list]
+            cols = ["Plan ID", "Week Range", "Teacher Name", "Student Name", "Subject", "Confirmed Class Time", "Topic / Curriculum", "Meeting Link", "Status", "Last Updated"]
+            if "Weekly_Plans" not in ws_names:
+                ws = sheet.add_worksheet(title="Weekly_Plans", rows="1000", cols="20")
+                ws.append_row(cols)
+                return pd.DataFrame(columns=cols)
+            ws = sheet.worksheet("Weekly_Plans")
+            data = ws.get_all_records()
+            return pd.DataFrame(data)
+        except Exception:
+            return pd.DataFrame()
+    return pd.DataFrame()
+
+def save_weekly_plan(client, week_range, teacher_name, student_name, subject, confirmed_time, topic, meeting_link, status="Confirmed"):
+    """
+    Saves or updates a teacher's weekly plan for a student in 'Weekly_Plans' tab.
+    """
+    sheet = get_sheet_by_id(client)
+    if not sheet:
+        return False, "Google Sheet client not connected."
+    try:
+        get_weekly_plans_data(client)
+        ws = sheet.worksheet("Weekly_Plans")
+        records = ws.get_all_records()
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        target_row = None
+        for idx, r in enumerate(records, start=2): # 1-indexed, header is row 1
+            r_week = str(r.get("Week Range", "")).strip().lower()
+            r_teacher = str(r.get("Teacher Name", "")).strip().lower()
+            r_student = str(r.get("Student Name", "")).strip().lower()
+            
+            if (r_week == str(week_range).strip().lower() and 
+                r_teacher == str(teacher_name).strip().lower() and 
+                r_student == str(student_name).strip().lower()):
+                target_row = idx
+                break
+                
+        clean_time = str(confirmed_time).strip()
+        clean_topic = str(topic).strip()
+        clean_link = str(meeting_link).strip()
+        clean_subject = str(subject).strip()
+        
+        if target_row:
+            # Columns: 1: Plan ID, 2: Week Range, 3: Teacher Name, 4: Student Name, 5: Subject, 6: Confirmed Class Time, 7: Topic / Curriculum, 8: Meeting Link, 9: Status, 10: Last Updated
+            ws.update_cell(target_row, 5, clean_subject)
+            ws.update_cell(target_row, 6, clean_time)
+            ws.update_cell(target_row, 7, clean_topic)
+            ws.update_cell(target_row, 8, clean_link)
+            ws.update_cell(target_row, 9, status)
+            ws.update_cell(target_row, 10, now_str)
+        else:
+            plan_id = str(uuid.uuid4())[:8]
+            row_data = [
+                plan_id, str(week_range), str(teacher_name), str(student_name),
+                clean_subject, clean_time, clean_topic, clean_link, status, now_str
+            ]
+            ws.append_row(row_data)
+            
+        return True, "Plan saved successfully!"
+    except Exception as e:
+        return False, f"Error saving plan: {e}"
+
+def get_teacher_assigned_students_details(client, teacher_name):
+    """
+    Returns a list of dicts for each student assigned to teacher_name.
+    Combines info from 'Teachers', 'Students', and 'Weekly_Plans' tabs.
+    """
+    df_teachers = get_teacher_data(client)
+    if df_teachers.empty or "Teacher Name" not in df_teachers.columns:
+        return []
+        
+    t_match = df_teachers[df_teachers["Teacher Name"].astype(str).str.strip().str.lower() == str(teacher_name).strip().lower()]
+    if t_match.empty:
+        return []
+        
+    t_row = t_match.iloc[0]
+    assigned_raw = str(t_row.get("Assigned Students", ""))
+    student_names = [s.strip() for s in assigned_raw.split(",") if s.strip()]
+    
+    if not student_names:
+        return []
+        
+    df_students = get_students_data(client)
+    week_range = get_current_week_range()
+    df_plans = get_weekly_plans_data(client)
+    
+    results = []
+    for s_name in student_names:
+        s_info = {
+            "Student Name": s_name,
+            "Email": "",
+            "Phone": "",
+            "Class Times": "",
+            "Subjects": "",
+            "Academic Progress": "N/A",
+            "Attendance": "N/A",
+            "Payment Status": "N/A",
+            "Current Week Plan": None
+        }
+        
+        if not df_students.empty and "Student Name" in df_students.columns:
+            s_match = df_students[df_students["Student Name"].astype(str).str.strip().str.lower() == s_name.lower()]
+            if not s_match.empty:
+                s_row = s_match.iloc[0]
+                s_info["Email"] = str(s_row.get("Email", ""))
+                s_info["Phone"] = str(s_row.get("Phone Number") or s_row.get("Phone") or "")
+                s_info["Class Times"] = str(s_row.get("Class Times", ""))
+                s_info["Subjects"] = str(s_row.get("Subjects", ""))
+                s_info["Academic Progress"] = s_row.get("Academic Progress", "N/A")
+                s_info["Attendance"] = s_row.get("Attendance", "N/A")
+                s_info["Payment Status"] = s_row.get("Payment Status", "N/A")
+                
+        if not df_plans.empty and "Week Range" in df_plans.columns:
+            p_match = df_plans[
+                (df_plans["Week Range"].astype(str).str.strip().str.lower() == week_range.lower()) &
+                (df_plans["Teacher Name"].astype(str).str.strip().str.lower() == str(teacher_name).strip().lower()) &
+                (df_plans["Student Name"].astype(str).str.strip().str.lower() == s_name.lower())
+            ]
+            if not p_match.empty:
+                s_info["Current Week Plan"] = p_match.iloc[0].to_dict()
+                
+        results.append(s_info)
+        
+    return results
+
