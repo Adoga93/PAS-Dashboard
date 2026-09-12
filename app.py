@@ -123,7 +123,35 @@ if portal_mode == "teacher" or teacher_param:
         [data-testid="stSidebarNav"] { display: none !important; }
         [data-testid="collapsedControl"] { display: none !important; }
         header[data-testid="stHeader"] { visibility: hidden !important; }
-        .block-container { padding-top: 1.5rem !important; max-width: 1000px !important; }
+        .block-container { padding-top: 1.5rem !important; max-width: 1100px !important; }
+        
+        /* Modern Teacher Dashboard Styling */
+        .portal-header {
+            background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%);
+            padding: 24px 28px;
+            border-radius: 16px;
+            color: white;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 25px -5px rgba(37, 99, 235, 0.25);
+        }
+        .profile-box {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 14px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .session-card {
+            background: #ffffff;
+            border-left: 5px solid #2563eb;
+            border-radius: 10px;
+            padding: 16px 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            margin-bottom: 14px;
+            border-top: 1px solid #f1f5f9;
+            border-right: 1px solid #f1f5f9;
+            border-bottom: 1px solid #f1f5f9;
+        }
         </style>
     """, unsafe_allow_html=True)
     
@@ -150,162 +178,261 @@ if portal_mode == "teacher" or teacher_param:
     t_expertise = teacher_row.get("Subject Expertise", "")
     week_range = utils.get_current_week_range()
     
+    # Fetch assigned students with their week plans
+    assigned_students = utils.get_teacher_assigned_students_details(client, teacher_name)
+    total_assigned = len(assigned_students)
+    confirmed_count = sum(1 for s in assigned_students if s.get("Current Week Plan", {}).get("Status") == "Confirmed")
+    
+    # Fetch this teacher's scheduled/active classes (strictly isolated to current teacher)
+    df_sessions = utils.get_sessions_data(client)
+    my_sessions = pd.DataFrame()
+    if not df_sessions.empty and "Teacher Name" in df_sessions.columns:
+        clean_current_teacher = teacher_name.strip().lower()
+        my_sessions = df_sessions[
+            (df_sessions["Teacher Name"].astype(str).str.strip().str.lower() == clean_current_teacher) &
+            (df_sessions["Status"].astype(str).str.strip().isin(["Scheduled", "In-Progress"]))
+        ]
+        
+    active_class_count = len(my_sessions["Session ID"].unique()) if not my_sessions.empty and "Session ID" in my_sessions.columns else len(my_sessions)
+    
     # Header Banner
     st.markdown(f"""
-    <div style="background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); padding: 22px 28px; border-radius: 12px; color: white; margin-bottom: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+    <div class="portal-header">
         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
             <div>
                 <h1 style="color: white; margin: 0; font-size: 26px; font-weight: 700;">Welcome, {teacher_name}! 👋</h1>
-                <p style="margin: 6px 0 0 0; opacity: 0.95; font-size: 15px;">📚 Weekly Lesson Planning & Class Confirmation</p>
+                <p style="margin: 6px 0 0 0; opacity: 0.95; font-size: 15px;">📚 Teacher Workspace • Weekly Lesson Planning & Confirmation</p>
             </div>
-            <div style="text-align: right; background: rgba(255,255,255,0.15); padding: 8px 16px; border-radius: 8px; margin-top: 8px;">
-                <span style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.85;">Current Week</span><br>
+            <div style="text-align: right; background: rgba(255,255,255,0.18); padding: 8px 18px; border-radius: 10px; margin-top: 8px;">
+                <span style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; opacity: 0.85;">Current Week</span><br>
                 <strong style="font-size: 15px;">{week_range}</strong>
             </div>
         </div>
-        <div style="margin-top: 14px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.2); font-size: 13px; opacity: 0.85;">
+        <div style="margin-top: 14px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.2); font-size: 13px; opacity: 0.9;">
             <span>📧 {t_email or 'No email recorded'}</span> &nbsp;•&nbsp; <span>🎯 Expertise: {t_expertise or 'General'}</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
     
-    st.caption("🔒 **Private Teacher Portal**: You only have access to your assigned students. Student reassignments are managed by the administrator.")
-    
-    # Fetch assigned students with their week plans
-    assigned_students = utils.get_teacher_assigned_students_details(client, teacher_name)
-    
-    col_t1, col_t2 = st.columns([3, 1])
-    with col_t1:
-        st.subheader(f"👥 Your Assigned Students ({len(assigned_students)})")
-    with col_t2:
-        if st.button("🔄 Refresh Data", key="t_portal_refresh"):
+    # KPI Metrics Row
+    m1, m2, m3, m4 = st.columns([1, 1, 1, 0.8])
+    with m1:
+        st.metric("👥 Assigned Students", f"{total_assigned}")
+    with m2:
+        st.metric("✅ Weekly Plans Confirmed", f"{confirmed_count} / {total_assigned}")
+    with m3:
+        st.metric("🚀 Active / Scheduled Classes", f"{active_class_count}")
+    with m4:
+        st.write("")
+        if st.button("🔄 Refresh Data", key="t_portal_refresh_btn", use_container_width=True):
             utils.get_teacher_data.clear()
             utils.get_students_data.clear()
             utils.get_weekly_plans_data.clear()
+            utils.get_sessions_data.clear()
             st.rerun()
-            
-    if not assigned_students:
-        st.info("📋 No students are currently assigned to you. When the administrator assigns students to you in the dashboard, they will immediately appear here.")
-        st.stop()
-        
-    st.markdown("Please confirm the scheduled class time, what you will teach this week, and upload or provide the class meeting link for each student below:")
-    
-    for idx, s in enumerate(assigned_students):
-        s_name = s["Student Name"]
-        curr_plan = s.get("Current Week Plan") or {}
-        is_confirmed = curr_plan.get("Status") == "Confirmed"
-        
-        default_time = curr_plan.get("Confirmed Class Time") or s.get("Class Times") or ""
-        default_subject = curr_plan.get("Subject") or s.get("Subjects") or ""
-        default_topic = curr_plan.get("Topic / Curriculum") or ""
-        default_link = curr_plan.get("Meeting Link") or ""
-        
-        status_icon = "✅ Confirmed for this Week" if is_confirmed else "⏳ Needs Confirmation"
-        
-        with st.expander(f"**{s_name}** — {status_icon}", expanded=(not is_confirmed or idx == 0)):
-            c_info1, c_info2 = st.columns(2)
-            with c_info1:
-                st.write(f"**Scheduled Class Time(s):** `{s.get('Class Times') or 'Not set'}`")
-                st.write(f"**Subject(s):** {s.get('Subjects') or 'General'}")
-            with c_info2:
-                st.write(f"**Student Email:** {s.get('Email') or 'N/A'}")
-                st.write(f"**Student Phone:** {s.get('Phone') or 'N/A'}")
-                
-            if is_confirmed:
-                st.success(f"**Confirmed Plan for {week_range}:**")
-                st.markdown(f"- **Time:** `{default_time}`\n- **Topic:** {default_topic or 'None entered'}")
-                if default_link:
-                    st.markdown(f"- **Class Link:** [{default_link}]({default_link})")
-            
-            st.markdown("---")
-            st.markdown("##### ✏️ Update / Confirm Weekly Plan")
-            
-            with st.form(key=f"teacher_plan_form_{idx}"):
-                c_f1, c_f2 = st.columns([2, 1])
-                new_time = c_f1.text_input(
-                    "Confirmed Class Day & Time", 
-                    value=default_time, 
-                    help="e.g. 'Monday 4:00 PM, Thursday 4:00 PM'"
-                )
-                new_sub = c_f2.text_input("Subject", value=default_subject)
-                
-                new_topic = st.text_area(
-                    "What will you be teaching this week? (Topic & Objectives)",
-                    value=default_topic,
-                    placeholder="e.g. Algebra: Solving Quadratic Equations by Factorization; Practice exercises 1 to 5.",
-                    help="Describe the curriculum topics and learning goals for the week."
-                )
-                
-                st.markdown("**Meeting Link (Zoom, Google Meet, Teams, etc.)**")
-                c_link, c_auto = st.columns([3, 2])
-                new_link = c_link.text_input(
-                    "Paste / Upload Meeting Link",
-                    value=default_link,
-                    placeholder="https://meet.google.com/... or https://zoom.us/j/...",
-                    help="Paste your own meeting link here (Zoom, Meet, Teams)."
-                )
-                auto_gen = c_auto.checkbox("Auto-generate Google Meet if empty", value=False, key=f"auto_meet_{idx}")
-                
-                submitted = st.form_submit_button("✅ Confirm Schedule & Lesson Plan", use_container_width=True)
-                
-                if submitted:
-                    final_link = new_link.strip()
-                    if not final_link and auto_gen:
-                        start_dt = datetime.datetime.now() + datetime.timedelta(hours=2)
-                        end_dt = start_dt + datetime.timedelta(hours=1)
-                        attendees = [t_email]
-                        if s.get("Email"):
-                            attendees.append(s["Email"])
-                        gen_link = utils.generate_meet_link(f"PAS Tutoring - {s_name} ({new_sub})", start_dt, end_dt, attendees)
-                        if gen_link:
-                            final_link = gen_link
-                            st.info(f"Generated Meet link: {final_link}")
-                        else:
-                            st.warning("Could not auto-generate Google Meet link. Please paste a meeting link manually.")
-                            
-                    success, msg = utils.save_weekly_plan(
-                        client, week_range, teacher_name, s_name,
-                        new_sub, new_time, new_topic, final_link, status="Confirmed"
-                    )
-                    if success:
-                        st.success(f"✅ Schedule and lesson plan confirmed for {s_name}!")
-                        time.sleep(0.8)
-                        st.rerun()
-                    else:
-                        st.error(f"❌ Error saving plan: {msg}")
 
-    # Section for Upcoming Classes & Surveys
     st.markdown("---")
-    st.subheader("🚀 Active & Scheduled Classes")
-    df_sessions = utils.get_sessions_data(client)
-    if not df_sessions.empty:
-        my_sessions = df_sessions[
-            (df_sessions["Teacher Name"].astype(str).str.strip().str.lower() == teacher_name.lower()) &
-            (df_sessions["Status"].isin(["Scheduled", "In-Progress"]))
-        ]
-        if not my_sessions.empty:
-            for _, sess in my_sessions.iterrows():
-                s_id = sess.get("Session ID", "")
-                s_subj = sess.get("Subject", "")
-                s_st = sess.get("Student Name", "")
-                s_time = sess.get("Scheduled Time", "")
-                s_status = sess.get("Status", "")
-                s_code = sess.get("Attendance Code", "N/A")
-                s_meet = sess.get("Meeting Link", "")
-                
-                with st.container():
-                    st.info(f"**{s_subj}** with **{s_st}** @ {s_time} | Status: `{s_status}` | Code: `{s_code}`")
-                    col_b1, col_b2 = st.columns(2)
-                    if s_meet:
-                        col_b1.markdown(f"[👉 **Join Class Meeting**]({s_meet})")
-                    base = utils.BASE_APP_URL.rstrip('/')
-                    end_url = f"{base}/?action=clock_out&session_id={s_id}&role=Teacher"
-                    col_b2.markdown(f"[📝 **End Class & Submit Survey**]({end_url})")
+    
+    # Primary Workspace Tabs
+    portal_tab1, portal_tab2 = st.tabs(["👥 My Students & Weekly Planning", f"🚀 My Scheduled & Active Classes ({active_class_count})"])
+    
+    with portal_tab1:
+        if not assigned_students:
+            st.info("📋 You currently have no students assigned to you. When the administrator assigns students to you in the dashboard, they will appear here immediately.")
         else:
-            st.caption("No active live sessions running right now.")
-    else:
-        st.caption("No session records found.")
+            student_names = [s["Student Name"] for s in assigned_students]
+            
+            # Manage active selected student in session_state
+            if "selected_teacher_student" not in st.session_state or st.session_state["selected_teacher_student"] not in student_names:
+                st.session_state["selected_teacher_student"] = student_names[0]
+                
+            st.subheader("📋 Select a Student to View Information & Plan")
+            st.caption("Click on any student card below to open their full details and submit what you will teach this week:")
+            
+            # Student Cards Selector Grid
+            num_cols = min(max(len(assigned_students), 1), 4)
+            card_cols = st.columns(num_cols)
+            
+            for idx, s in enumerate(assigned_students):
+                c_idx = idx % num_cols
+                s_name = s["Student Name"]
+                c_plan = s.get("Current Week Plan") or {}
+                is_conf = (c_plan.get("Status") == "Confirmed")
+                is_sel = (s_name == st.session_state["selected_teacher_student"])
+                
+                with card_cols[c_idx]:
+                    status_text = "✅ Plan Confirmed" if is_conf else "⏳ Plan Needed"
+                    status_color = "#16a34a" if is_conf else "#d97706"
+                    card_border = "2px solid #2563eb" if is_sel else "1px solid #cbd5e1"
+                    card_bg = "#eff6ff" if is_sel else "#ffffff"
+                    
+                    st.markdown(f"""
+                    <div style="border: {card_border}; background: {card_bg}; padding: 14px 16px; border-radius: 12px; margin-bottom: 8px;">
+                        <div style="font-size: 16px; font-weight: 700; color: #1e293b;">{s_name}</div>
+                        <div style="font-size: 12px; font-weight: 600; color: {status_color}; margin-top: 2px;">{status_text}</div>
+                        <div style="font-size: 12px; color: #64748b; margin-top: 4px;">Times: {s.get('Class Times') or 'Not set'}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    button_label = f"⭐ Viewing {s_name}" if is_sel else f"Select {s_name}"
+                    if st.button(button_label, key=f"sel_student_btn_{idx}", use_container_width=True, type="primary" if is_sel else "secondary"):
+                        st.session_state["selected_teacher_student"] = s_name
+                        st.rerun()
+
+            st.markdown("---")
+            
+            # DETAILED WORKSPACE FOR THE SELECTED STUDENT
+            selected_student_name = st.session_state["selected_teacher_student"]
+            student_data = next((s for s in assigned_students if s["Student Name"] == selected_student_name), assigned_students[0])
+            curr_plan = student_data.get("Current Week Plan") or {}
+            is_confirmed = (curr_plan.get("Status") == "Confirmed")
+            
+            default_time = curr_plan.get("Confirmed Class Time") or student_data.get("Class Times") or ""
+            default_subject = curr_plan.get("Subject") or student_data.get("Subjects") or ""
+            default_topic = curr_plan.get("Topic / Curriculum") or ""
+            default_link = curr_plan.get("Meeting Link") or ""
+            
+            st.markdown(f"### 👤 {selected_student_name} — Details & Lesson Confirmation")
+            
+            # Master-Detail Layout: Profile on Left, Confirmation Form on Right
+            c_left, c_right = st.columns([1, 1.4])
+            
+            with c_left:
+                st.markdown("##### 📌 Student Information")
+                st.markdown(f"""
+                <div class="profile-box">
+                    <p style="margin: 0 0 8px 0; font-size: 16px;"><strong>👤 Name:</strong> {selected_student_name}</p>
+                    <p style="margin: 0 0 8px 0;"><strong>📧 Email:</strong> {student_data.get('Email') or 'Not recorded'}</p>
+                    <p style="margin: 0 0 8px 0;"><strong>📞 Phone:</strong> {student_data.get('Phone') or 'Not recorded'}</p>
+                    <p style="margin: 0 0 8px 0;"><strong>⏰ Preferred Class Times:</strong><br><code>{student_data.get('Class Times') or 'Not set'}</code></p>
+                    <p style="margin: 0 0 8px 0;"><strong>📚 Subjects:</strong> {student_data.get('Subjects') or 'General'}</p>
+                    <p style="margin: 0 0 8px 0;"><strong>📈 Academic Progress:</strong> {student_data.get('Academic Progress', 'N/A')}%</p>
+                    <p style="margin: 0 0 0 0;"><strong>🗓️ Attendance:</strong> {student_data.get('Attendance', 'N/A')}</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                if is_confirmed:
+                    st.success("##### ✅ Weekly Plan Confirmed")
+                    st.markdown(f"""
+                    - **Confirmed Time:** `{default_time}`
+                    - **Topic:** {default_topic or 'None entered'}
+                    """)
+                    if default_link:
+                        st.markdown(f"[👉 **Click to Launch Class Meeting**]({default_link})")
+                else:
+                    st.warning("⚠️ **Plan Needed**: Please confirm the class day/time and curriculum for this week in the form.")
+                    
+            with c_right:
+                st.markdown("##### ✏️ Weekly Plan Confirmation Form")
+                with st.form(key=f"form_plan_{selected_student_name}"):
+                    c_f1, c_f2 = st.columns([2, 1])
+                    new_time = c_f1.text_input(
+                        "Confirmed Class Day & Time for this Week", 
+                        value=default_time, 
+                        help="e.g. 'Monday 4:00 PM, Thursday 4:00 PM'"
+                    )
+                    new_sub = c_f2.text_input("Subject", value=default_subject)
+                    
+                    new_topic = st.text_area(
+                        "What will you be teaching this week? (Topic & Curriculum)",
+                        value=default_topic,
+                        placeholder="e.g. Algebra: Solving Linear & Quadratic Equations; Review of past exercises.",
+                        help="Outline the topics, curriculum, and goals you will cover with this student this week."
+                    )
+                    
+                    st.markdown("**Meeting Link (Zoom, Google Meet, Teams, etc.)**")
+                    c_link, c_auto = st.columns([3, 2])
+                    new_link = c_link.text_input(
+                        "Paste / Upload Meeting Link",
+                        value=default_link,
+                        placeholder="https://meet.google.com/... or https://zoom.us/j/...",
+                        help="Paste your own meeting link here."
+                    )
+                    auto_gen = c_auto.checkbox("Auto-generate Google Meet if empty", value=False, key=f"auto_meet_sel_{selected_student_name}")
+                    
+                    submitted = st.form_submit_button(f"✅ Save & Confirm Plan for {selected_student_name}", use_container_width=True, type="primary")
+                    
+                    if submitted:
+                        final_link = new_link.strip()
+                        if not final_link and auto_gen:
+                            start_dt = datetime.datetime.now() + datetime.timedelta(hours=2)
+                            end_dt = start_dt + datetime.timedelta(hours=1)
+                            attendees = [t_email]
+                            if student_data.get("Email"):
+                                attendees.append(student_data["Email"])
+                            gen_link = utils.generate_meet_link(f"PAS Tutoring - {selected_student_name} ({new_sub})", start_dt, end_dt, attendees)
+                            if gen_link:
+                                final_link = gen_link
+                                st.info(f"Generated Google Meet link: {final_link}")
+                            else:
+                                st.warning("Could not auto-generate Google Meet link. Please paste a meeting link manually.")
+                                
+                        success, msg = utils.save_weekly_plan(
+                            client, week_range, teacher_name, selected_student_name,
+                            new_sub, new_time, new_topic, final_link, status="Confirmed"
+                        )
+                        if success:
+                            st.success(f"✅ Schedule and lesson plan confirmed for {selected_student_name}!")
+                            time.sleep(0.6)
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Error saving plan: {msg}")
+
+    # TAB 2: ACTIVE & SCHEDULED CLASSES FOR THIS TEACHER ONLY
+    with portal_tab2:
+        st.subheader(f"🚀 Active & Scheduled Classes for {teacher_name}")
+        st.caption("Live sessions and scheduled classes. Strictly filtered to classes where you are the designated teacher.")
         
+        if not my_sessions.empty:
+            # Group multi-student sessions by Session ID so each class appears once
+            grouped_classes = my_sessions.groupby("Session ID", as_index=False).agg({
+                "Subject": "first",
+                "Student Name": lambda x: ", ".join(x.astype(str).unique()),
+                "Scheduled Time": "first",
+                "Status": "first",
+                "Attendance Code": "first",
+                "Meeting Link": "first"
+            })
+            
+            for _, row in grouped_classes.iterrows():
+                s_id = row.get("Session ID", "")
+                s_subj = row.get("Subject", "General")
+                s_st = row.get("Student Name", "")
+                s_time = row.get("Scheduled Time", "")
+                s_status = row.get("Status", "Scheduled")
+                s_code = row.get("Attendance Code", "N/A")
+                s_meet = row.get("Meeting Link", "")
+                
+                status_color = "#10b981" if s_status == "In-Progress" else "#2563eb"
+                
+                st.markdown(f"""
+                <div class="session-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
+                        <div>
+                            <span style="background: {status_color}; color: white; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase;">
+                                {s_status}
+                            </span>
+                            <h3 style="margin: 8px 0 4px 0; font-size: 18px; color: #1e293b;">{s_subj} with {s_st}</h3>
+                            <p style="margin: 0; font-size: 14px; color: #64748b;">📅 Scheduled Time: <strong>{s_time}</strong></p>
+                        </div>
+                        <div style="text-align: right; margin-top: 6px;">
+                            <span style="font-size: 12px; color: #64748b;">Attendance Code</span><br>
+                            <span style="font-size: 20px; font-weight: 700; color: #1e293b; letter-spacing: 1px;">{s_code}</span>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                col_act1, col_act2 = st.columns(2)
+                if s_meet:
+                    col_act1.markdown(f"[👉 **Click to Join Class Meeting**]({s_meet})")
+                base = utils.BASE_APP_URL.rstrip('/')
+                end_url = f"{base}/?action=clock_out&session_id={s_id}&role=Teacher"
+                col_act2.markdown(f"[📝 **End Class & Submit Survey**]({end_url})")
+                st.markdown("---")
+        else:
+            st.info(f"✨ No active or scheduled live sessions found for {teacher_name}.")
+
     st.stop() # CRITICAL: Teacher cannot view or execute admin dashboard
 
 # --- SIDEBAR ---
