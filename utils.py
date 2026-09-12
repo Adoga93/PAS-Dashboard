@@ -1695,15 +1695,60 @@ def submit_survey(client, session_id, survey_data):
 # TEACHER PORTAL & WEEKLY PLANS HELPERS
 # ==========================================
 
-def get_current_week_range(target_date=None):
+def normalize_name(name):
     """
-    Returns string formatted as: 'Mon, Sep 08 - Sun, Sep 14, 2026'
+    Normalizes a name string by collapsing multiple spaces, trimming, and lowercasing.
+    E.g. 'Kyrie  Amana ' -> 'kyrie amana'
+    """
+    if not name or pd.isna(name):
+        return ""
+    return re.sub(r'\s+', ' ', str(name)).strip().lower()
+
+def get_current_week_range(target_date=None, shift_on_weekend=True):
+    """
+    Returns string formatted as: 'Sep 14 - Sep 20, 2026'.
+    On Saturday (weekday 5) and Sunday (weekday 6), shifts to the upcoming week (next Mon-Sun) for planning.
     """
     if target_date is None:
         target_date = datetime.date.today()
-    monday = target_date - datetime.timedelta(days=target_date.weekday())
+        
+    if shift_on_weekend and target_date.weekday() >= 5: # Saturday or Sunday
+        days_ahead = 7 - target_date.weekday()
+        monday = target_date + datetime.timedelta(days=days_ahead)
+    else:
+        monday = target_date - datetime.timedelta(days=target_date.weekday())
+        
     sunday = monday + datetime.timedelta(days=6)
     return f"{monday.strftime('%b %d')} - {sunday.strftime('%b %d, %Y')}"
+
+def get_available_planning_weeks(target_date=None):
+    """
+    Returns planning weeks dictionary:
+    - active_week: Default week (next week if Sat/Sun, else current week)
+    - current_week: Mon-Sun of current week
+    - upcoming_week: Mon-Sun of next week
+    - is_weekend: True if Saturday or Sunday
+    """
+    if target_date is None:
+        target_date = datetime.date.today()
+        
+    is_weekend = (target_date.weekday() >= 5)
+    cur_monday = target_date - datetime.timedelta(days=target_date.weekday())
+    cur_sunday = cur_monday + datetime.timedelta(days=6)
+    cur_week_str = f"{cur_monday.strftime('%b %d')} - {cur_sunday.strftime('%b %d, %Y')}"
+    
+    next_monday = cur_monday + datetime.timedelta(days=7)
+    next_sunday = next_monday + datetime.timedelta(days=6)
+    next_week_str = f"{next_monday.strftime('%b %d')} - {next_sunday.strftime('%b %d, %Y')}"
+    
+    active_week = next_week_str if is_weekend else cur_week_str
+    
+    return {
+        "active_week": active_week,
+        "current_week": cur_week_str,
+        "upcoming_week": next_week_str,
+        "is_weekend": is_weekend
+    }
 
 def generate_teacher_portal_link(teacher_name, base_url=None):
     """
@@ -1711,7 +1756,8 @@ def generate_teacher_portal_link(teacher_name, base_url=None):
     """
     base = base_url or BASE_APP_URL
     base = base.rstrip('/')
-    encoded_name = urllib.parse.quote_plus(str(teacher_name).strip())
+    clean_name = re.sub(r'\s+', ' ', str(teacher_name)).strip()
+    encoded_name = urllib.parse.quote_plus(clean_name)
     return f"{base}/?portal=teacher&t={encoded_name}"
 
 @retry_on_quota
@@ -1739,6 +1785,7 @@ def get_weekly_plans_data(_client):
 def save_weekly_plan(client, week_range, teacher_name, student_name, subject, confirmed_time, topic, meeting_link, status="Confirmed"):
     """
     Saves or updates a teacher's weekly plan for a student in 'Weekly_Plans' tab.
+    Uses normalize_name for robust row matching.
     """
     sheet = get_sheet_by_id(client)
     if not sheet:
@@ -1750,14 +1797,18 @@ def save_weekly_plan(client, week_range, teacher_name, student_name, subject, co
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         target_row = None
+        clean_target_week = normalize_name(week_range)
+        clean_target_teacher = normalize_name(teacher_name)
+        clean_target_student = normalize_name(student_name)
+        
         for idx, r in enumerate(records, start=2): # 1-indexed, header is row 1
-            r_week = str(r.get("Week Range", "")).strip().lower()
-            r_teacher = str(r.get("Teacher Name", "")).strip().lower()
-            r_student = str(r.get("Student Name", "")).strip().lower()
+            r_week = normalize_name(r.get("Week Range", ""))
+            r_teacher = normalize_name(r.get("Teacher Name", ""))
+            r_student = normalize_name(r.get("Student Name", ""))
             
-            if (r_week == str(week_range).strip().lower() and 
-                r_teacher == str(teacher_name).strip().lower() and 
-                r_student == str(student_name).strip().lower()):
+            if (r_week == clean_target_week and 
+                r_teacher == clean_target_teacher and 
+                r_student == clean_target_student):
                 target_row = idx
                 break
                 
@@ -1765,6 +1816,8 @@ def save_weekly_plan(client, week_range, teacher_name, student_name, subject, co
         clean_topic = str(topic).strip()
         clean_link = str(meeting_link).strip()
         clean_subject = str(subject).strip()
+        canonical_teacher = re.sub(r'\s+', ' ', str(teacher_name)).strip()
+        canonical_student = re.sub(r'\s+', ' ', str(student_name)).strip()
         
         if target_row:
             # Columns: 1: Plan ID, 2: Week Range, 3: Teacher Name, 4: Student Name, 5: Subject, 6: Confirmed Class Time, 7: Topic / Curriculum, 8: Meeting Link, 9: Status, 10: Last Updated
@@ -1777,7 +1830,7 @@ def save_weekly_plan(client, week_range, teacher_name, student_name, subject, co
         else:
             plan_id = str(uuid.uuid4())[:8]
             row_data = [
-                plan_id, str(week_range), str(teacher_name), str(student_name),
+                plan_id, str(week_range), canonical_teacher, canonical_student,
                 clean_subject, clean_time, clean_topic, clean_link, status, now_str
             ]
             ws.append_row(row_data)
@@ -1786,34 +1839,50 @@ def save_weekly_plan(client, week_range, teacher_name, student_name, subject, co
     except Exception as e:
         return False, f"Error saving plan: {e}"
 
-def get_teacher_assigned_students_details(client, teacher_name):
+def get_teacher_assigned_students_details(client, teacher_name, week_range=None):
     """
     Returns a list of dicts for each student assigned to teacher_name.
     Combines info from 'Teachers', 'Students', and 'Weekly_Plans' tabs.
+    Robustly handles whitespace, casing, and dual-direction mappings.
     """
+    if week_range is None:
+        week_range = get_current_week_range()
+        
     df_teachers = get_teacher_data(client)
     if df_teachers.empty or "Teacher Name" not in df_teachers.columns:
         return []
         
-    t_match = df_teachers[df_teachers["Teacher Name"].astype(str).str.strip().str.lower() == str(teacher_name).strip().lower()]
+    clean_target_t = normalize_name(teacher_name)
+    
+    # Match teacher with normalize_name
+    t_match = df_teachers[df_teachers["Teacher Name"].apply(normalize_name) == clean_target_t]
     if t_match.empty:
         return []
         
     t_row = t_match.iloc[0]
     assigned_raw = str(t_row.get("Assigned Students", ""))
-    student_names = [s.strip() for s in assigned_raw.split(",") if s.strip()]
+    raw_student_names = [s.strip() for s in assigned_raw.split(",") if s.strip()]
     
-    if not student_names:
+    if not raw_student_names:
         return []
         
     df_students = get_students_data(client)
-    week_range = get_current_week_range()
     df_plans = get_weekly_plans_data(client)
     
     results = []
-    for s_name in student_names:
+    seen_students_norm = set()
+    
+    for s_name in raw_student_names:
+        s_norm = normalize_name(s_name)
+        if not s_norm or s_norm in seen_students_norm:
+            continue
+        seen_students_norm.add(s_norm)
+        
+        # Default display name cleaned
+        display_name = re.sub(r'\s+', ' ', str(s_name)).strip()
+        
         s_info = {
-            "Student Name": s_name,
+            "Student Name": display_name,
             "Email": "",
             "Phone": "",
             "Class Times": "",
@@ -1825,22 +1894,25 @@ def get_teacher_assigned_students_details(client, teacher_name):
         }
         
         if not df_students.empty and "Student Name" in df_students.columns:
-            s_match = df_students[df_students["Student Name"].astype(str).str.strip().str.lower() == s_name.lower()]
+            s_match = df_students[df_students["Student Name"].apply(normalize_name) == s_norm]
             if not s_match.empty:
                 s_row = s_match.iloc[0]
-                s_info["Email"] = str(s_row.get("Email", ""))
-                s_info["Phone"] = str(s_row.get("Phone Number") or s_row.get("Phone") or "")
-                s_info["Class Times"] = str(s_row.get("Class Times", ""))
-                s_info["Subjects"] = str(s_row.get("Subjects", ""))
+                canonical_name = re.sub(r'\s+', ' ', str(s_row.get("Student Name", ""))).strip()
+                if canonical_name:
+                    s_info["Student Name"] = canonical_name
+                s_info["Email"] = str(s_row.get("Email", "")).strip()
+                s_info["Phone"] = str(s_row.get("Phone Number") or s_row.get("Phone") or "").strip()
+                s_info["Class Times"] = str(s_row.get("Class Times", "")).strip()
+                s_info["Subjects"] = str(s_row.get("Subjects", "")).strip()
                 s_info["Academic Progress"] = s_row.get("Academic Progress", "N/A")
                 s_info["Attendance"] = s_row.get("Attendance", "N/A")
                 s_info["Payment Status"] = s_row.get("Payment Status", "N/A")
                 
         if not df_plans.empty and "Week Range" in df_plans.columns:
             p_match = df_plans[
-                (df_plans["Week Range"].astype(str).str.strip().str.lower() == week_range.lower()) &
-                (df_plans["Teacher Name"].astype(str).str.strip().str.lower() == str(teacher_name).strip().lower()) &
-                (df_plans["Student Name"].astype(str).str.strip().str.lower() == s_name.lower())
+                (df_plans["Week Range"].apply(normalize_name) == normalize_name(week_range)) &
+                (df_plans["Teacher Name"].apply(normalize_name) == clean_target_t) &
+                (df_plans["Student Name"].apply(normalize_name) == s_norm)
             ]
             if not p_match.empty:
                 s_info["Current Week Plan"] = p_match.iloc[0].to_dict()
@@ -1848,4 +1920,5 @@ def get_teacher_assigned_students_details(client, teacher_name):
         results.append(s_info)
         
     return results
+
 

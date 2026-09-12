@@ -162,10 +162,11 @@ if portal_mode == "teacher" or teacher_param:
         st.stop()
         
     # Match teacher
+    # Match teacher with utils.normalize_name
     teacher_row = None
     if not df_teachers.empty and "Teacher Name" in df_teachers.columns:
-        clean_param = str(teacher_param).strip().lower()
-        matches = df_teachers[df_teachers["Teacher Name"].astype(str).str.strip().str.lower() == clean_param]
+        clean_param = utils.normalize_name(teacher_param)
+        matches = df_teachers[df_teachers["Teacher Name"].apply(utils.normalize_name) == clean_param]
         if not matches.empty:
             teacher_row = matches.iloc[0]
             
@@ -173,13 +174,39 @@ if portal_mode == "teacher" or teacher_param:
         st.error(f"❌ Teacher profile '{teacher_param}' not found. Please contact the administrator.")
         st.stop()
         
-    teacher_name = teacher_row.get("Teacher Name", "")
+    teacher_name = str(teacher_row.get("Teacher Name", "")).strip()
     t_email = teacher_row.get("Email", "")
     t_expertise = teacher_row.get("Subject Expertise", "")
-    week_range = utils.get_current_week_range()
     
-    # Fetch assigned students with their week plans
-    assigned_students = utils.get_teacher_assigned_students_details(client, teacher_name)
+    # Week calculation & Weekend planning mode
+    weeks_info = utils.get_available_planning_weeks()
+    is_weekend = weeks_info["is_weekend"]
+    
+    if is_weekend:
+        opt_upcoming = f"Upcoming Week: {weeks_info['upcoming_week']} (Default)"
+        opt_current = f"Current Closing Week: {weeks_info['current_week']}"
+        week_options = [opt_upcoming, opt_current]
+        week_lookup = {
+            opt_upcoming: weeks_info["upcoming_week"],
+            opt_current: weeks_info["current_week"]
+        }
+    else:
+        opt_current = f"Current Week: {weeks_info['current_week']} (Active)"
+        opt_upcoming = f"Next Week: {weeks_info['upcoming_week']}"
+        week_options = [opt_current, opt_upcoming]
+        week_lookup = {
+            opt_current: weeks_info["current_week"],
+            opt_upcoming: weeks_info["upcoming_week"]
+        }
+        
+    # Week selector controls
+    c_hdr_left, c_hdr_right = st.columns([2, 1])
+    with c_hdr_right:
+        selected_week_label = st.selectbox("📅 Week to Confirm/View", week_options, index=0)
+        selected_week = week_lookup[selected_week_label]
+        
+    # Fetch assigned students with their week plans for chosen week
+    assigned_students = utils.get_teacher_assigned_students_details(client, teacher_name, week_range=selected_week)
     total_assigned = len(assigned_students)
     confirmed_count = sum(1 for s in assigned_students if (s.get("Current Week Plan") or {}).get("Status") == "Confirmed")
     
@@ -187,15 +214,16 @@ if portal_mode == "teacher" or teacher_param:
     df_sessions = utils.get_sessions_data(client)
     my_sessions = pd.DataFrame()
     if not df_sessions.empty and "Teacher Name" in df_sessions.columns:
-        clean_current_teacher = teacher_name.strip().lower()
+        clean_current_teacher = utils.normalize_name(teacher_name)
         my_sessions = df_sessions[
-            (df_sessions["Teacher Name"].astype(str).str.strip().str.lower() == clean_current_teacher) &
+            (df_sessions["Teacher Name"].apply(utils.normalize_name) == clean_current_teacher) &
             (df_sessions["Status"].astype(str).str.strip().isin(["Scheduled", "In-Progress"]))
         ]
         
     active_class_count = len(my_sessions["Session ID"].unique()) if not my_sessions.empty and "Session ID" in my_sessions.columns else len(my_sessions)
     
     # Header Banner
+    badge_title = "Upcoming Week" if (is_weekend and selected_week == weeks_info['upcoming_week']) else "Active Week"
     st.markdown(f"""
     <div class="portal-header">
         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
@@ -204,8 +232,8 @@ if portal_mode == "teacher" or teacher_param:
                 <p style="margin: 6px 0 0 0; opacity: 0.95; font-size: 15px;">📚 Teacher Workspace • Weekly Lesson Planning & Confirmation</p>
             </div>
             <div style="text-align: right; background: rgba(255,255,255,0.18); padding: 8px 18px; border-radius: 10px; margin-top: 8px;">
-                <span style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; opacity: 0.85;">Current Week</span><br>
-                <strong style="font-size: 15px;">{week_range}</strong>
+                <span style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; opacity: 0.85;">{badge_title}</span><br>
+                <strong style="font-size: 15px;">{selected_week}</strong>
             </div>
         </div>
         <div style="margin-top: 14px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.2); font-size: 13px; opacity: 0.9;">
@@ -214,12 +242,15 @@ if portal_mode == "teacher" or teacher_param:
     </div>
     """, unsafe_allow_html=True)
     
+    if is_weekend and selected_week == weeks_info['upcoming_week']:
+        st.info(f"🔔 **Weekend Planning Notice**: It is the weekend! You are confirming schedules and lesson plans for the upcoming week (**Monday to Sunday: {weeks_info['upcoming_week']}**).")
+    
     # KPI Metrics Row
     m1, m2, m3, m4 = st.columns([1, 1, 1, 0.8])
     with m1:
         st.metric("👥 Assigned Students", f"{total_assigned}")
     with m2:
-        st.metric("✅ Weekly Plans Confirmed", f"{confirmed_count} / {total_assigned}")
+        st.metric(f"✅ Plans Confirmed ({selected_week})", f"{confirmed_count} / {total_assigned}")
     with m3:
         st.metric("🚀 Active / Scheduled Classes", f"{active_class_count}")
     with m4:
@@ -368,7 +399,7 @@ if portal_mode == "teacher" or teacher_param:
                                 st.warning("Could not auto-generate Google Meet link. Please paste a meeting link manually.")
                                 
                         success, msg = utils.save_weekly_plan(
-                            client, week_range, teacher_name, selected_student_name,
+                            client, selected_week, teacher_name, selected_student_name,
                             new_sub, new_time, new_topic, final_link, status="Confirmed"
                         )
                         if success:
@@ -991,13 +1022,14 @@ elif tab == "Admin Dashboard":
                         if not df_teachers_list.empty and "Teacher Name" in df_teachers_list.columns:
                             teacher_options.extend(df_teachers_list["Teacher Name"].tolist())
                             
-                        # Find current assigned teachers for THIS student
-                        curr_student_norm = sel_s_edit.strip().lower()
+                        # Find current assigned teachers for THIS student using normalize_name
+                        curr_student_norm = utils.normalize_name(sel_s_edit)
                         current_teachers_mapped = []
                         if not df_teachers_list.empty:
                             for _, t_row in df_teachers_list.iterrows():
                                 assigned = str(t_row.get("Assigned Students", ""))
-                                if curr_student_norm in [a.strip().lower() for a in assigned.split(",")]:
+                                assigned_norms = [utils.normalize_name(a) for a in assigned.split(",") if a.strip()]
+                                if curr_student_norm in assigned_norms:
                                     current_teachers_mapped.append(t_row.get("Teacher Name"))
                         
                         all_edit_subjects = []
@@ -1136,8 +1168,15 @@ elif tab == "Admin Dashboard":
                         curr_assign_str = str(curr_t.get("Assigned Students", ""))
                         curr_assign_list = [x.strip() for x in curr_assign_str.split(",")] if curr_assign_str else []
                         
-                        # Filter to ensure default values exist in options
-                        valid_defaults = [x for x in curr_assign_list if x in valid_students_list]
+                        # Robust matching using normalize_name so spaces don't drop students
+                        student_norm_map = {utils.normalize_name(s): s for s in valid_students_list}
+                        valid_defaults = []
+                        for x in curr_assign_list:
+                            x_norm = utils.normalize_name(x)
+                            if x_norm in student_norm_map:
+                                valid_defaults.append(student_norm_map[x_norm])
+                            elif x in valid_students_list:
+                                valid_defaults.append(x)
                         
                         et_assign_list = st.multiselect("Assigned Students", valid_students_list, default=valid_defaults)
                         et_assign = ", ".join(et_assign_list)
