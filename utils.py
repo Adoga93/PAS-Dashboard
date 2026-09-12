@@ -1821,7 +1821,7 @@ def get_teacher_assigned_students_details(client, teacher_name):
             "Academic Progress": "N/A",
             "Attendance": "N/A",
             "Payment Status": "N/A",
-            "Current Week Plan": None
+            "Current Week Plan": {}
         }
         
         if not df_students.empty and "Student Name" in df_students.columns:

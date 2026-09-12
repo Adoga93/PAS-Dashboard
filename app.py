@@ -181,7 +181,7 @@ if portal_mode == "teacher" or teacher_param:
     # Fetch assigned students with their week plans
     assigned_students = utils.get_teacher_assigned_students_details(client, teacher_name)
     total_assigned = len(assigned_students)
-    confirmed_count = sum(1 for s in assigned_students if s.get("Current Week Plan", {}).get("Status") == "Confirmed")
+    confirmed_count = sum(1 for s in assigned_students if (s.get("Current Week Plan") or {}).get("Status") == "Confirmed")
     
     # Fetch this teacher's scheduled/active classes (strictly isolated to current teacher)
     df_sessions = utils.get_sessions_data(client)
