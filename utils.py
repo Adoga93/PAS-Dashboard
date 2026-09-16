@@ -1760,6 +1760,7 @@ def generate_teacher_portal_link(teacher_name, base_url=None):
     encoded_name = urllib.parse.quote_plus(clean_name)
     return f"{base}/?portal=teacher&t={encoded_name}"
 
+@st.cache_data(ttl=300)
 @retry_on_quota
 def get_weekly_plans_data(_client):
     """
@@ -1835,6 +1836,8 @@ def save_weekly_plan(client, week_range, teacher_name, student_name, subject, co
             ]
             ws.append_row(row_data)
             
+        if hasattr(get_weekly_plans_data, "clear"):
+            get_weekly_plans_data.clear()
         return True, "Plan saved successfully!"
     except Exception as e:
         return False, f"Error saving plan: {e}"

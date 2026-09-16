@@ -256,16 +256,104 @@ if portal_mode == "teacher" or teacher_param:
     with m4:
         st.write("")
         if st.button("🔄 Refresh Data", key="t_portal_refresh_btn", use_container_width=True):
-            utils.get_teacher_data.clear()
-            utils.get_students_data.clear()
-            utils.get_weekly_plans_data.clear()
-            utils.get_sessions_data.clear()
+            for fn in [getattr(utils, 'get_teacher_data', None), 
+                       getattr(utils, 'get_students_data', None), 
+                       getattr(utils, 'get_weekly_plans_data', None), 
+                       getattr(utils, 'get_sessions_data', None)]:
+                if fn and hasattr(fn, 'clear'):
+                    try:
+                        fn.clear()
+                    except Exception:
+                        pass
+            try:
+                st.cache_data.clear()
+            except Exception:
+                pass
             st.rerun()
 
     st.markdown("---")
     
+    # --- TODAY'S SCHEDULE LOGIC ---
+    today_dt = datetime.date.today()
+    today_str = today_dt.strftime("%Y-%m-%d")
+    today_display = today_dt.strftime("%A, %B %d, %Y")
+    
+    today_classes = pd.DataFrame()
+    if not df_sessions.empty and "Teacher Name" in df_sessions.columns and "Scheduled Time" in df_sessions.columns:
+        clean_current_teacher = utils.normalize_name(teacher_name)
+        teacher_all_sessions = df_sessions[df_sessions["Teacher Name"].apply(utils.normalize_name) == clean_current_teacher]
+        if not teacher_all_sessions.empty:
+            today_classes = teacher_all_sessions[
+                teacher_all_sessions["Scheduled Time"].astype(str).str.contains(today_str) &
+                (~teacher_all_sessions["Status"].astype(str).str.lower().str.contains("cancel"))
+            ]
+            
+    today_count = len(today_classes["Session ID"].unique()) if not today_classes.empty and "Session ID" in today_classes.columns else len(today_classes)
+
     # Primary Workspace Tabs
-    portal_tab1, portal_tab2 = st.tabs(["👥 My Students & Weekly Planning", f"🚀 My Scheduled & Active Classes ({active_class_count})"])
+    portal_tab0, portal_tab1, portal_tab2 = st.tabs([
+        f"📅 Today's Schedule ({today_count})",
+        "👥 My Students & Weekly Planning", 
+        f"🚀 All Scheduled Classes ({active_class_count})"
+    ])
+    
+    # TAB 0: TODAY'S CLASSES (DEFAULT VIEW)
+    with portal_tab0:
+        st.subheader(f"📅 Today's Class Schedule ({today_display})")
+        
+        # 100% Automated Recording Indicator Banner
+        st.markdown("""
+        <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; padding: 14px 20px; margin-bottom: 20px; display: flex; align-items: center; gap: 14px; box-shadow: 0 2px 6px rgba(22, 101, 52, 0.05);">
+            <span style="font-size: 26px;">🤖</span>
+            <div>
+                <strong style="color: #166534; font-size: 15px;">100% Automated Cloud Recording Active</strong><br>
+                <span style="color: #15803d; font-size: 13px;">The PAS Tutors Cloud Recorder automatically enters each meeting at its scheduled time, mutes, records the entire lesson, and uploads it to Google Drive. Zero manual recording action required!</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        if today_classes.empty:
+            st.info(f"🌴 **No classes scheduled for today ({today_display}).** Enjoy your day, or use the **Weekly Planning** tab to confirm upcoming sessions!")
+        else:
+            grouped_today = today_classes.groupby("Session ID", as_index=False).agg({
+                "Subject": "first",
+                "Student Name": lambda x: ", ".join(x.astype(str).unique()),
+                "Scheduled Time": "first",
+                "Status": "first",
+                "Meeting Link": "first"
+            })
+            grouped_today = grouped_today.sort_values(by="Scheduled Time")
+            
+            for _, c_row in grouped_today.iterrows():
+                c_subj = c_row.get("Subject", "Class")
+                c_st = c_row.get("Student Name", "Student")
+                c_time = c_row.get("Scheduled Time", "")
+                c_status = str(c_row.get("Status", "Scheduled")).strip()
+                c_link = str(c_row.get("Meeting Link", "")).strip()
+                
+                is_active = c_status.lower() in ["in-progress", "recording"]
+                status_pill = '<span style="background: #ef4444; color: white; padding: 3px 12px; border-radius: 12px; font-size: 11px; font-weight: 700; text-transform: uppercase;">🔴 Live / In Progress</span>' if is_active else '<span style="background: #2563eb; color: white; padding: 3px 12px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase;">⏳ Scheduled Today</span>'
+                
+                meet_btn_html = ""
+                if c_link and (c_link.startswith("http://") or c_link.startswith("https://")):
+                    meet_btn_html = f'<a href="{c_link}" target="_blank" style="display: inline-block; background: #2563eb; color: white; text-decoration: none; padding: 9px 18px; border-radius: 8px; font-weight: 600; font-size: 13px; margin-top: 6px;">👉 Join Meeting Room</a>'
+                else:
+                    meet_btn_html = '<span style="color: #94a3b8; font-size: 13px;">No meeting link attached</span>'
+                    
+                st.markdown(f"""
+                <div style="background: white; border-left: 5px solid {'#ef4444' if is_active else '#2563eb'}; border-radius: 10px; padding: 18px 22px; margin-bottom: 16px; box-shadow: 0 2px 10px rgba(0,0,0,0.06); border-top: 1px solid #f1f5f9; border-right: 1px solid #f1f5f9; border-bottom: 1px solid #f1f5f9;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
+                        <div>
+                            <div style="margin-bottom: 8px;">{status_pill}</div>
+                            <h3 style="margin: 0 0 6px 0; color: #0f172a; font-size: 19px; font-weight: 700;">{c_subj} with {c_st}</h3>
+                            <p style="margin: 0; color: #475569; font-size: 14px;">⏰ Scheduled Time: <strong>{c_time}</strong></p>
+                        </div>
+                        <div style="margin-top: 8px; text-align: right;">
+                            {meet_btn_html}
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
     
     with portal_tab1:
         if not assigned_students:
