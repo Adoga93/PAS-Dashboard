@@ -941,6 +941,95 @@ def generate_master_schedule(client, selected_day_full):
     
     return df
 
+@st.cache_data(ttl=300)
+def get_teacher_master_schedule(_client, teacher_name, selected_day=None):
+    """
+    Pulls all recurring classes for a specific teacher directly from the master schedule
+    (Student Class Times mapped to assigned teachers) and enriches with confirmed meeting links.
+    """
+    df_students = get_students_data(_client)
+    if df_students.empty or "Class Times" not in df_students.columns:
+        return pd.DataFrame()
+
+    student_teacher_map = get_student_teacher_map(_client)
+    clean_target_teacher = normalize_name(teacher_name)
+
+    # 1. Map meeting links from Weekly_Plans tab
+    df_wp = get_weekly_plans_data(_client)
+    links_map = {}
+    if not df_wp.empty and "Teacher Name" in df_wp.columns and "Student Name" in df_wp.columns and "Meeting Link" in df_wp.columns:
+        for _, wp_row in df_wp.iterrows():
+            t_clean = normalize_name(str(wp_row.get("Teacher Name", "")))
+            s_clean = normalize_name(str(wp_row.get("Student Name", "")))
+            m_link = str(wp_row.get("Meeting Link", "")).strip()
+            if t_clean == clean_target_teacher and m_link:
+                links_map[s_clean] = m_link
+
+    # 2. Fallback meeting links from Sessions tab
+    df_sess = get_sessions_data(_client)
+    if not df_sess.empty and "Teacher Name" in df_sess.columns and "Student Name" in df_sess.columns and "Meeting Link" in df_sess.columns:
+        for _, s_row in df_sess.iterrows():
+            t_clean = normalize_name(str(s_row.get("Teacher Name", "")))
+            s_clean = normalize_name(str(s_row.get("Student Name", "")))
+            m_link = str(s_row.get("Meeting Link", "")).strip()
+            if t_clean == clean_target_teacher and m_link and s_clean not in links_map:
+                links_map[s_clean] = m_link
+
+    day_order = {"Monday": 1, "Tuesday": 2, "Wednesday": 3, "Thursday": 4, "Friday": 5, "Saturday": 6, "Sunday": 7}
+    classes = []
+
+    for _, s_row in df_students.iterrows():
+        s_name = s_row.get("Student Name", "Unknown")
+        c_times = str(s_row.get("Class Times", ""))
+        parsed_classes = parse_student_schedule(c_times)
+        s_clean = normalize_name(s_name)
+
+        for cls in parsed_classes:
+            if not cls["Valid"]:
+                continue
+
+            if cls.get("AssignedTeacher"):
+                final_teacher = cls["AssignedTeacher"]
+            else:
+                s_key = s_name.strip().lower()
+                subj_key = cls["Subject"].strip().lower()
+                potential_teachers_data = student_teacher_map.get(s_key, [])
+                potential_teachers = []
+                for t in potential_teachers_data:
+                    if not t["expertise"] or subj_key in t["expertise"]:
+                        potential_teachers.append(t["name"])
+                final_teacher = "Unassigned"
+                if len(potential_teachers) == 1:
+                    final_teacher = potential_teachers[0]
+                elif len(potential_teachers) > 1:
+                    final_teacher = ", ".join(potential_teachers)
+
+            if clean_target_teacher in normalize_name(final_teacher):
+                cls_day = cls.get("Day", "")
+                if selected_day and selected_day != "All Days" and cls_day.lower() != selected_day.lower():
+                    continue
+
+                classes.append({
+                    "Day": cls_day,
+                    "DayOrder": day_order.get(cls_day, 99),
+                    "Time": cls["Time"],
+                    "EndTime": cls["EndTime"] if cls["EndTime"] else "-",
+                    "Duration": cls["Duration"],
+                    "TimeObj": cls["TimeObj"],
+                    "Student": s_name,
+                    "Subject": cls["Subject"],
+                    "MeetingLink": links_map.get(s_clean, "")
+                })
+
+    if not classes:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(classes)
+    df = df.sort_values(by=["DayOrder", "TimeObj"])
+    df = df.drop(columns=["DayOrder", "TimeObj"])
+    return df
+
+
 
 # --- SESSION MANAGEMENT (PHASE 2) ---
 import uuid
