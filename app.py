@@ -523,8 +523,103 @@ if portal_mode == "teacher" or teacher_param:
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
+
+        # --- SECTION: STUDENT MONTHLY EVALUATIONS & CONFIRMATION ---
+        st.markdown("---")
+        st.subheader("📋 Student Monthly Evaluations & Confirmation")
+        st.caption("Review your assigned students' recorded class reports, edit remarks, and confirm monthly reports for Head Teacher approval.")
+
+        if assigned_students:
+            t_student_names = [s.get("Student Name") for s in assigned_students if s.get("Student Name")]
+            sel_tp_student = st.selectbox("Select Student for Monthly Review", t_student_names, key="tp_sel_student")
+            
+            # Month selection
+            curr_month_str = datetime.date.today().strftime("%B %Y")
+            tp_month = st.selectbox("Evaluation Month", [curr_month_str, "September 2026", "November 2026"], index=0, key="tp_sel_month")
+            
+            # Fetch existing monthly report
+            df_m_all = utils.get_monthly_reports_data(client)
+            s_norm = utils.normalize_name(sel_tp_student)
+            
+            existing_m = pd.DataFrame()
+            if not df_m_all.empty and "Student Name" in df_m_all.columns:
+                existing_m = df_m_all[
+                    (df_m_all["Student Name"].apply(utils.normalize_name) == s_norm) &
+                    (df_m_all["Month"].str.strip().str.lower() == tp_month.strip().lower())
+                ]
+                
+            c_tp_gen, c_tp_info = st.columns([1, 2])
+            with c_tp_gen:
+                if st.button("⚡ Generate / Refresh Monthly Draft", key="tp_btn_draft"):
+                    draft = utils.generate_monthly_report_draft(client, sel_tp_student, tp_month)
+                    draft["Teacher Name"] = teacher_name
+                    succ, msg = utils.save_monthly_report(client, draft)
+                    if succ:
+                        st.success("Draft generated from class recordings!")
+                        time.sleep(0.5)
+                        st.rerun()
+                    else:
+                        st.error(f"Error: {msg}")
+                        
+            if not existing_m.empty:
+                m_row = existing_m.iloc[0].to_dict()
+                m_status = m_row.get("Status", "Draft")
+                m_id = m_row.get("Monthly Report ID")
+                
+                status_color = "🟢" if m_status == "Approved by Head Teacher" else "🔵" if m_status == "Confirmed by Teacher" else "🟡"
+                st.info(f"**Status:** {status_color} **{m_status}** • **Classes:** {m_row.get('Total Classes')} ({m_row.get('Total Hours')} hrs)")
+                
+                with st.form(f"tp_edit_m_form_{m_id}"):
+                    st.markdown("#### ✏️ Review & Edit Monthly Report Content")
+                    tp_curriculum = st.text_area("Curriculum & Topics Covered", value=m_row.get("Curriculum Covered", ""), height=100)
+                    tp_hw = st.text_area("Homework & Independent Practice", value=m_row.get("Homework Rating", ""), height=80)
+                    tp_comp = st.text_area("Concept Comprehension & Attitude", value=m_row.get("Comprehension & Progress", ""), height=80)
+                    tp_t_remarks = st.text_area("Teacher Remarks & Observations", value=m_row.get("Teacher Remarks", ""), height=100)
+                    
+                    c_save, c_confirm = st.columns(2)
+                    with c_save:
+                        submit_save = st.form_submit_button("💾 Save My Edits")
+                    with c_confirm:
+                        submit_confirm = st.form_submit_button("✍️ Confirm & Submit to Head Teacher")
+                        
+                    if submit_save:
+                        m_row["Curriculum Covered"] = tp_curriculum
+                        m_row["Homework Rating"] = tp_hw
+                        m_row["Comprehension & Progress"] = tp_comp
+                        m_row["Teacher Remarks"] = tp_t_remarks
+                        m_row["Teacher Name"] = teacher_name
+                        succ, msg = utils.save_monthly_report(client, m_row)
+                        if succ:
+                            st.success("Changes saved successfully!")
+                            time.sleep(0.5)
+                            st.rerun()
+                        else:
+                            st.error(f"Save failed: {msg}")
+                            
+                    if submit_confirm:
+                        succ, msg = utils.confirm_monthly_report_teacher(client, m_id, teacher_name, tp_t_remarks)
+                        if succ:
+                            st.balloons()
+                            st.success("✅ Monthly report confirmed! Submitted to Head Teacher for final approval.")
+                            time.sleep(0.7)
+                            st.rerun()
+                        else:
+                            st.error(f"Confirmation failed: {msg}")
+                            
+                # Downloadable preview
+                html_preview = utils.generate_monthly_report_html(m_row)
+                st.download_button(
+                    label="📥 Download Printable Report (HTML / PDF)",
+                    data=html_preview,
+                    file_name=f"PAS_Report_{sel_tp_student}_{tp_month}.html",
+                    mime="text/html",
+                    key=f"tp_dl_{m_id}"
+                )
+            else:
+                st.info("No monthly report generated yet for this student. Click 'Generate / Refresh Monthly Draft' above to aggregate their class reports.")
                 
     st.stop() # CRITICAL: Teacher cannot view or execute admin dashboard
+
 
 # --- SIDEBAR ---
 st.sidebar.title("PAS Tutors")
@@ -540,7 +635,7 @@ if st.sidebar.button("🔄 Sync with Database (Refresh)"):
     st.rerun()
 
 st.sidebar.markdown("---")
-tab = st.sidebar.radio("Navigate to", ["Student Tab", "Teacher Tab", "Registration", "Admin Dashboard"])
+tab = st.sidebar.radio("Navigate to", ["Student Tab", "Teacher Tab", "Registration", "Class & Monthly Reports", "Admin Dashboard"])
 
 # --- STUDENT TAB ---
 if tab == "Student Tab":
@@ -623,8 +718,83 @@ if tab == "Student Tab":
 
 
 
+    # --- STUDENT CLASS REPORTS & MONTHLY EVALUATION DRILL-DOWN ---
+    st.markdown("---")
+    st.subheader("📚 Student Recorded Class Reports & Monthly Evaluations")
+    with st.expander("🔍 View & Manage Individual Student Reports", expanded=False):
+        if not df_students.empty and "Student Name" in df_students.columns:
+            st_names_list = sorted([s for s in df_students["Student Name"].dropna().unique() if str(s).strip()])
+            selected_student_report = st.selectbox("Choose Student to View Reports", st_names_list, key="st_tab_sel_student")
+            
+            if selected_student_report:
+                s_norm = utils.normalize_name(selected_student_report)
+                df_c_all = utils.get_class_reports_data(client)
+                df_m_all = utils.get_monthly_reports_data(client)
+                
+                # Match class reports
+                s_class_reports = pd.DataFrame()
+                if not df_c_all.empty and "Student Name" in df_c_all.columns:
+                    s_class_reports = df_c_all[df_c_all["Student Name"].apply(utils.normalize_name) == s_norm]
+                    
+                # Match monthly reports
+                s_monthly_reports = pd.DataFrame()
+                if not df_m_all.empty and "Student Name" in df_m_all.columns:
+                    s_monthly_reports = df_m_all[df_m_all["Student Name"].apply(utils.normalize_name) == s_norm]
+                    
+                col_c1, col_c2 = st.columns(2)
+                col_c1.metric("Recorded Class Sessions", len(s_class_reports))
+                col_c2.metric("Monthly Evaluations", len(s_monthly_reports))
+                
+                tab_rep1, tab_rep2 = st.tabs(["📝 Recorded Class Sessions", "📊 Monthly Reports"])
+                
+                with tab_rep1:
+                    if s_class_reports.empty:
+                        st.info(f"No recorded class session reports found for {selected_student_report} yet.")
+                    else:
+                        for _, c_rep in s_class_reports.iterrows():
+                            r_date = c_rep.get("Date", "N/A")
+                            r_subj = c_rep.get("Subject", "General")
+                            r_topic = c_rep.get("Topic", "Lesson")
+                            r_teacher = c_rep.get("Teacher Name", "Tutor")
+                            r_id = c_rep.get("Report ID")
+                            
+                            with st.expander(f"📅 {r_date} • {r_subj}: {r_topic} (Teacher: {r_teacher})"):
+                                st.markdown(f"**Executive Summary:** {c_rep.get('Executive Summary', 'N/A')}")
+                                
+                                c_l, c_r = st.columns(2)
+                                with c_l:
+                                    st.markdown("**Curriculum Covered:**")
+                                    st.write(utils._safe_json_loads(c_rep.get("Curriculum Breakdown")))
+                                with c_r:
+                                    st.markdown("**Homework & Tasks:**")
+                                    st.write(utils._safe_json_loads(c_rep.get("Homework Tracking")))
+                                    
+                with tab_rep2:
+                    if s_monthly_reports.empty:
+                        st.info(f"No monthly reports compiled for {selected_student_report} yet. You can generate one in the 'Class & Monthly Reports' tab.")
+                    else:
+                        for _, m_rep in s_monthly_reports.iterrows():
+                            m_month = m_rep.get("Month", "")
+                            m_status = m_rep.get("Status", "Draft")
+                            m_id = m_rep.get("Monthly Report ID")
+                            status_badge = "🟢" if m_status == "Approved by Head Teacher" else "🔵" if m_status == "Confirmed by Teacher" else "🟡"
+                            
+                            with st.expander(f"{status_badge} {m_month} Report • Status: {m_status}"):
+                                st.write(f"**Teacher Remarks:** {m_rep.get('Teacher Remarks')}")
+                                st.write(f"**Head Teacher Comments:** {m_rep.get('Head Teacher Recommendations')}")
+                                
+                                html_dl = utils.generate_monthly_report_html(m_rep.to_dict())
+                                st.download_button(
+                                    "📥 Download Printable Evaluation (HTML / PDF)",
+                                    data=html_dl,
+                                    file_name=f"PAS_Report_{selected_student_report}_{m_month}.html",
+                                    mime="text/html",
+                                    key=f"st_dl_m_{m_id}"
+                                )
+
     st.markdown("---")
     st.subheader("✅ Class Portal")
+
     with st.expander("Clock In (Students & Teachers)", expanded=True):
          st.info("Check your email for the Class Code!")
          u_code = st.text_input("Enter Attendance Code", key="univ_code")
@@ -926,9 +1096,431 @@ elif tab == "Registration":
             else:
                 st.warning("Name is required.")
 
+# --- CLASS & MONTHLY REPORTS TAB ---
+elif tab == "Class & Monthly Reports":
+    st.header("📑 Student Class & Monthly Progress Reports")
+    st.caption("Review recording bot class session analyses, edit pedagogical remarks, confirm monthly evaluations (Teacher ➔ Head Teacher), and export parent-ready reports.")
+
+    df_students_all = utils.get_students_data(client)
+    df_teachers_all = utils.get_teacher_data(client)
+    df_class_reps = utils.get_class_reports_data(client)
+    df_monthly_reps = utils.get_monthly_reports_data(client)
+
+    # Top KPI Metrics
+    total_class_reps = len(df_class_reps)
+    students_with_reps = df_class_reps["Student Name"].nunique() if not df_class_reps.empty and "Student Name" in df_class_reps.columns else 0
+    pending_teacher = len(df_monthly_reps[df_monthly_reps["Status"] == "Draft"]) if not df_monthly_reps.empty and "Status" in df_monthly_reps.columns else 0
+    pending_head = len(df_monthly_reps[df_monthly_reps["Status"] == "Confirmed by Teacher"]) if not df_monthly_reps.empty and "Status" in df_monthly_reps.columns else 0
+    ready_parents = len(df_monthly_reps[df_monthly_reps["Status"] == "Approved by Head Teacher"]) if not df_monthly_reps.empty and "Status" in df_monthly_reps.columns else 0
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("📹 Recorded Class Sessions", total_class_reps)
+    m2.metric("⏳ Awaiting Teacher Sign-off", pending_teacher)
+    m3.metric("👑 Awaiting Head Teacher", pending_head)
+    m4.metric("✅ Ready for Parents", ready_parents)
+
+    st.markdown("---")
+    subtab_sessions, subtab_monthly = st.tabs([
+        "📝 Individual Recorded Class Reports", 
+        "📊 Consolidated Monthly Reports & Sign-off"
+    ])
+
+    # ========================================================
+    # SUBTAB 1: INDIVIDUAL CLASS SESSION REPORTS
+    # ========================================================
+    with subtab_sessions:
+        c_sync1, c_sync2 = st.columns([3, 1])
+        with c_sync1:
+            st.subheader("Class Session Pedagogical Reports")
+            st.caption("Detailed AI analyses generated by the meeting recording bot for each class session.")
+        with c_sync2:
+            if st.button("🔄 Sync with Recording Bot", help="Checks local recordings/reports folder and updates Google Sheet"):
+                utils.get_class_reports_data.clear()
+                st.success("Synced! Refreshing reports...")
+                time.sleep(0.5)
+                st.rerun()
+
+        # Filters
+        st_filter_options = ["All Students"]
+        if not df_students_all.empty and "Student Name" in df_students_all.columns:
+            st_filter_options.extend(sorted([s for s in df_students_all["Student Name"].dropna().unique() if str(s).strip()]))
+
+        col_f1, col_f2, col_f3 = st.columns([2, 2, 2])
+        with col_f1:
+            sel_filter_st = st.selectbox("Filter by Student", st_filter_options, key="cr_filter_student")
+        with col_f2:
+            subj_filter_options = ["All Subjects"] + utils.STANDARD_SUBJECTS
+            sel_filter_subj = st.selectbox("Filter by Subject", subj_filter_options, key="cr_filter_subj")
+        with col_f3:
+            search_rep_kw = st.text_input("🔍 Search Keyword (Topic, notes)", "", key="cr_search_kw")
+
+        # Filter data
+        filtered_reps = df_class_reps.copy() if not df_class_reps.empty else pd.DataFrame()
+        if not filtered_reps.empty:
+            if sel_filter_st != "All Students":
+                filtered_reps = filtered_reps[filtered_reps["Student Name"].apply(utils.normalize_name) == utils.normalize_name(sel_filter_st)]
+            if sel_filter_subj != "All Subjects" and "Subject" in filtered_reps.columns:
+                filtered_reps = filtered_reps[filtered_reps["Subject"].str.lower() == sel_filter_subj.lower()]
+            if search_rep_kw and "Topic" in filtered_reps.columns:
+                kw = search_rep_kw.lower()
+                filtered_reps = filtered_reps[
+                    filtered_reps["Topic"].str.lower().str.contains(kw, na=False) |
+                    filtered_reps["Executive Summary"].str.lower().str.contains(kw, na=False) |
+                    filtered_reps["Student Name"].str.lower().str.contains(kw, na=False)
+                ]
+
+        # Add manual report expander
+        with st.expander("➕ Add Manual Class Report (For unrecorded or external classes)", expanded=False):
+            with st.form("manual_class_report_form"):
+                st.markdown("##### New Class Report Details")
+                st_list_man = [s for s in df_students_all["Student Name"].dropna().unique() if str(s).strip()] if not df_students_all.empty else ["Student"]
+                t_list_man = [t for t in df_teachers_all["Teacher Name"].dropna().unique() if str(t).strip()] if not df_teachers_all.empty else ["Teacher"]
+                
+                c_m1, c_m2, c_m3 = st.columns(3)
+                with c_m1:
+                    man_st = st.selectbox("Student Name", st_list_man, key="man_st")
+                with c_m2:
+                    man_t = st.selectbox("Teacher Name", t_list_man, key="man_t")
+                with c_m3:
+                    man_subj = st.selectbox("Subject", utils.STANDARD_SUBJECTS, key="man_subj")
+                    
+                c_m4, c_m5, c_m6 = st.columns(3)
+                with c_m4:
+                    man_date = st.date_input("Class Date", value=datetime.date.today(), key="man_date")
+                with c_m5:
+                    man_dur = st.selectbox("Duration", ["45 mins", "60 mins", "90 mins", "120 mins"], index=1, key="man_dur")
+                with c_m6:
+                    man_topic = st.text_input("Core Topic Taught", key="man_topic")
+                    
+                man_summary = st.text_area("Executive Summary of Lesson", key="man_summary")
+                
+                c_m7, c_m8 = st.columns(2)
+                with c_m7:
+                    man_curriculum = st.text_area("Curriculum & Key Concepts (One per line)", key="man_curr")
+                with c_m8:
+                    man_hw = st.text_area("Homework Assigned & Review Notes", key="man_hw")
+                    
+                c_m9, c_m10 = st.columns(2)
+                with c_m9:
+                    man_interaction = st.text_area("Student Interaction, Engagement & Comprehension", key="man_inter")
+                with c_m10:
+                    man_teacher_eng = st.text_area("Teacher Notes & Constructive Feedback", key="man_t_eng")
+                    
+                if st.form_submit_button("💾 Save Class Report"):
+                    if not man_topic:
+                        st.warning("Please provide at least a topic name.")
+                    else:
+                        new_rep = {
+                            "Report ID": str(uuid.uuid4()),
+                            "Session ID": "",
+                            "Date": str(man_date),
+                            "Student Name": man_st,
+                            "Teacher Name": man_t,
+                            "Subject": man_subj,
+                            "Topic": man_topic,
+                            "Duration": man_dur,
+                            "Executive Summary": man_summary,
+                            "Curriculum Breakdown": {"topicTaught": man_topic, "keyConcepts": [c.strip() for c in man_curriculum.split("\n") if c.strip()]},
+                            "Homework Tracking": {"newHomeworkDetails": man_hw, "previousHomeworkReviewed": True},
+                            "Student Interaction": {"comprehensionAssessment": man_interaction, "engagementLevel": "High"},
+                            "Teacher Engagement": {"encouragementAndPraise": man_teacher_eng},
+                            "Anomalies": {},
+                            "Social Highlights": {},
+                            "File Name": f"manual_{man_st}_{man_date}",
+                            "Status": "Manually Logged"
+                        }
+                        succ, msg = utils.save_class_report(client, new_rep)
+                        if succ:
+                            st.success("✅ Manual class report logged successfully!")
+                            time.sleep(0.5)
+                            st.rerun()
+                        else:
+                            st.error(f"Failed to save: {msg}")
+
+        # List reports
+        if filtered_reps.empty:
+            st.info("ℹ️ No class reports found matching the criteria. Click 'Sync with Recording Bot' or 'Add Manual Class Report' above.")
+        else:
+            st.write(f"Showing **{len(filtered_reps)}** class reports:")
+            for idx, r_row in filtered_reps.iterrows():
+                r_id = r_row.get("Report ID", "")
+                r_date = r_row.get("Date", "")
+                r_st = r_row.get("Student Name", "Student")
+                r_t = r_row.get("Teacher Name", "Teacher")
+                r_subj = r_row.get("Subject", "")
+                r_top = r_row.get("Topic", "Class Session")
+                r_dur = r_row.get("Duration", "60 mins")
+                r_status = r_row.get("Status", "Generated")
+                r_file = r_row.get("File Name", "")
+                
+                with st.expander(f"📅 {r_date} • 🎓 {r_st} • 📚 {r_subj}: {r_top} ({r_dur})", expanded=(idx == 0 and len(filtered_reps) == 1)):
+                    st.markdown(f"**Teacher:** `{r_t}` &nbsp;•&nbsp; **Status:** `{r_status}` &nbsp;•&nbsp; **Source File:** `{r_file or 'Bot Recording'}`")
+                    
+                    st.info(f"**Executive Summary:** {r_row.get('Executive Summary', 'No summary recorded.')}")
+                    
+                    # 2-column breakdown
+                    col_det1, col_det2 = st.columns(2)
+                    with col_det1:
+                        st.markdown("##### 📚 Curriculum Breakdown")
+                        curr_data = utils._safe_json_loads(r_row.get("Curriculum Breakdown"))
+                        if isinstance(curr_data, dict):
+                            st.write(f"**Topic Taught:** {curr_data.get('topicTaught', r_top)}")
+                            if curr_data.get("keyConcepts"):
+                                st.write("**Key Concepts:**")
+                                for kc in curr_data.get("keyConcepts", []):
+                                    st.write(f"- {kc}")
+                            if curr_data.get("learningObjectives"):
+                                st.write(f"**Objectives:** {', '.join(curr_data.get('learningObjectives', []))}")
+                        else:
+                            st.write(curr_data)
+                            
+                    with col_det2:
+                        st.markdown("##### 📝 Homework Tracking")
+                        hw_data = utils._safe_json_loads(r_row.get("Homework Tracking"))
+                        if isinstance(hw_data, dict):
+                            st.write(f"**Prior Homework Reviewed:** {'Yes' if hw_data.get('previousHomeworkReviewed') else 'No / Not Set'}")
+                            if hw_data.get("previousHomeworkFindings"):
+                                st.write(f"**Findings:** {hw_data.get('previousHomeworkFindings')}")
+                            if hw_data.get("newHomeworkDetails"):
+                                st.write(f"**New Tasks Assigned:** {hw_data.get('newHomeworkDetails')}")
+                        else:
+                            st.write(hw_data)
+                            
+                    col_det3, col_det4 = st.columns(2)
+                    with col_det3:
+                        st.markdown("##### 🎯 Student Interaction & Comprehension")
+                        inter_data = utils._safe_json_loads(r_row.get("Student Interaction"))
+                        if isinstance(inter_data, dict):
+                            st.write(f"**Engagement Level:** `{inter_data.get('engagementLevel', 'High')}`")
+                            st.write(f"**Confidence:** `{inter_data.get('studentConfidence', 'Good')}`")
+                            st.write(f"**Comprehension Notes:** {inter_data.get('comprehensionAssessment', 'N/A')}")
+                        else:
+                            st.write(inter_data)
+                            
+                    with col_det4:
+                        st.markdown("##### 👨‍🏫 Teacher Feedback & Pedagogy")
+                        t_data = utils._safe_json_loads(r_row.get("Teacher Engagement"))
+                        if isinstance(t_data, dict):
+                            st.write(f"**Methodology:** {t_data.get('pedagogyMethodology', 'Direct Instruction & Practice')}")
+                            st.write(f"**Praise & Encouragement:** {t_data.get('encouragementAndPraise', 'N/A')}")
+                            tb = t_data.get("timeBreakdown", {})
+                            if tb:
+                                st.caption(f"⏱️ Time: Instruction {tb.get('instructionPercentage', 40)}% | Practice {tb.get('practicePercentage', 40)}% | Discussion {tb.get('discussionPercentage', 20)}%")
+                        else:
+                            st.write(t_data)
+                            
+                    # Edit mode
+                    with st.expander(f"✏️ Edit Report for {r_st} ({r_date})", expanded=False):
+                        with st.form(f"edit_rep_form_{r_id}_{idx}"):
+                            edit_topic = st.text_input("Topic", value=r_top, key=f"ed_top_{r_id}")
+                            edit_exec = st.text_area("Executive Summary", value=r_row.get("Executive Summary", ""), key=f"ed_exec_{r_id}")
+                            edit_t_notes = st.text_area("Teacher Remarks & Feedback", value=str(utils._safe_json_loads(r_row.get("Teacher Engagement")).get("encouragementAndPraise", "")), key=f"ed_t_notes_{r_id}")
+                            edit_hw_notes = st.text_area("Homework Details", value=str(utils._safe_json_loads(r_row.get("Homework Tracking")).get("newHomeworkDetails", "")), key=f"ed_hw_notes_{r_id}")
+                            
+                            if st.form_submit_button("💾 Save Report Edits"):
+                                rep_dict = r_row.to_dict()
+                                rep_dict["Topic"] = edit_topic
+                                rep_dict["Executive Summary"] = edit_exec
+                                
+                                # Update JSONs
+                                h_dict = utils._safe_json_loads(rep_dict.get("Homework Tracking"))
+                                if isinstance(h_dict, dict):
+                                    h_dict["newHomeworkDetails"] = edit_hw_notes
+                                    rep_dict["Homework Tracking"] = h_dict
+                                    
+                                t_dict = utils._safe_json_loads(rep_dict.get("Teacher Engagement"))
+                                if isinstance(t_dict, dict):
+                                    t_dict["encouragementAndPraise"] = edit_t_notes
+                                    rep_dict["Teacher Engagement"] = t_dict
+                                    
+                                rep_dict["Status"] = "Edited"
+                                succ, msg = utils.save_class_report(client, rep_dict)
+                                if succ:
+                                    st.success("✅ Changes saved to Google Sheet!")
+                                    time.sleep(0.5)
+                                    st.rerun()
+                                else:
+                                    st.error(f"Save failed: {msg}")
+
+    # ========================================================
+    # SUBTAB 2: CONSOLIDATED MONTHLY REPORTS & SIGN-OFF
+    # ========================================================
+    with subtab_monthly:
+        st.subheader("Monthly Academic Evaluation & 2-Stage Sign-off")
+        st.caption("Consolidates all session reports for a student across the month. Must be confirmed by the Teacher, approved by the Head Teacher, and then exported for parents.")
+
+        # Controls
+        st_list_for_monthly = [s for s in df_students_all["Student Name"].dropna().unique() if str(s).strip()] if not df_students_all.empty else ["Student"]
+        curr_month = datetime.date.today().strftime("%B %Y")
+        month_choices = [curr_month, "September 2026", "November 2026", "December 2026"]
+        
+        c_m_sel1, c_m_sel2, c_m_sel3 = st.columns([2, 2, 2])
+        with c_m_sel1:
+            sel_m_student = st.selectbox("Select Student", st_list_for_monthly, key="m_sel_student")
+        with c_m_sel2:
+            sel_m_month = st.selectbox("Select Month", month_choices, key="m_sel_month")
+        with c_m_sel3:
+            st.markdown("<br>", unsafe_allow_html=True)
+            btn_gen_monthly = st.button("⚡ Generate / Refresh Monthly Draft", key="btn_gen_monthly")
+
+        if btn_gen_monthly and sel_m_student:
+            draft = utils.generate_monthly_report_draft(client, sel_m_student, sel_m_month)
+            succ, msg = utils.save_monthly_report(client, draft)
+            if succ:
+                st.success(f"✅ Generated monthly report draft for {sel_m_student} ({sel_m_month}) from recorded sessions!")
+                time.sleep(0.5)
+                st.rerun()
+            else:
+                st.error(f"Error generating draft: {msg}")
+
+        # Look up existing monthly report for this student and month
+        s_norm = utils.normalize_name(sel_m_student)
+        curr_report_match = pd.DataFrame()
+        if not df_monthly_reps.empty and "Student Name" in df_monthly_reps.columns:
+            curr_report_match = df_monthly_reps[
+                (df_monthly_reps["Student Name"].apply(utils.normalize_name) == s_norm) &
+                (df_monthly_reps["Month"].str.strip().str.lower() == sel_m_month.strip().lower())
+            ]
+
+        if curr_report_match.empty:
+            st.info(f"ℹ️ No monthly report on file for **{sel_m_student}** for **{sel_m_month}** yet. Click '⚡ Generate / Refresh Monthly Draft' above to aggregate their class reports into a monthly report.")
+        else:
+            rep_data = curr_report_match.iloc[0].to_dict()
+            rep_id = rep_data.get("Monthly Report ID")
+            rep_status = rep_data.get("Status", "Draft")
+            
+            # Workflow Status Badge Banner
+            if rep_status == "Approved by Head Teacher":
+                st.success("🟢 **Status: Approved by Head Teacher** • This monthly report is fully verified and ready for the parent!")
+            elif rep_status == "Confirmed by Teacher":
+                st.info("🔵 **Status: Confirmed by Teacher** • Awaiting final quality approval from the Head Teacher.")
+            else:
+                st.warning("🟡 **Status: Draft (Pending Teacher Confirmation)** • Please review and confirm below.")
+
+            # Summary Metrics Row
+            cm_c1, cm_c2, cm_c3, cm_c4 = st.columns(4)
+            cm_c1.metric("Classes Held", rep_data.get("Total Classes", 0))
+            cm_c2.metric("Tutoring Hours", f"{rep_data.get('Total Hours', 0)}h")
+            cm_c3.metric("Lead Teacher", rep_data.get("Teacher Name", "Tutor"))
+            cm_c4.metric("Subject", rep_data.get("Subject", "General"))
+
+            # Editable Monthly Report Form
+            with st.form(f"monthly_edit_form_{rep_id}"):
+                st.markdown("### ✏️ Edit Monthly Evaluation Details")
+                st.caption("You can edit any section before confirming or approving. Edits are saved directly to Google Sheets.")
+                
+                f_curriculum = st.text_area("1. Curriculum & Topics Covered Across Month", value=rep_data.get("Curriculum Covered", ""), height=120)
+                f_hw = st.text_area("2. Homework & Independent Practice Performance", value=rep_data.get("Homework Rating", ""), height=90)
+                f_comp = st.text_area("3. Concept Comprehension & Academic Growth", value=rep_data.get("Comprehension & Progress", ""), height=90)
+                f_teacher_rem = st.text_area("4. Teacher's Evaluation & Remarks", value=rep_data.get("Teacher Remarks", ""), height=100)
+                f_ht_recs = st.text_area("5. Head Teacher's Quality Seal & Recommendations", value=rep_data.get("Head Teacher Recommendations", ""), height=90)
+                
+                c_btn_save, c_btn_t_confirm, c_btn_ht_approve = st.columns(3)
+                with c_btn_save:
+                    btn_save_edits = st.form_submit_button("💾 Save Changes to Report")
+                with c_btn_t_confirm:
+                    btn_t_confirm = st.form_submit_button("✍️ Teacher Confirm & Sign-off")
+                with c_btn_ht_approve:
+                    btn_ht_approve = st.form_submit_button("👑 Head Teacher Final Approval")
+
+                if btn_save_edits:
+                    rep_data["Curriculum Covered"] = f_curriculum
+                    rep_data["Homework Rating"] = f_hw
+                    rep_data["Comprehension & Progress"] = f_comp
+                    rep_data["Teacher Remarks"] = f_teacher_rem
+                    rep_data["Head Teacher Recommendations"] = f_ht_recs
+                    succ, msg = utils.save_monthly_report(client, rep_data)
+                    if succ:
+                        st.success("✅ Monthly report changes saved successfully!")
+                        time.sleep(0.5)
+                        st.rerun()
+                    else:
+                        st.error(f"Save failed: {msg}")
+
+                if btn_t_confirm:
+                    t_signer = rep_data.get("Teacher Name") or "Teacher"
+                    succ, msg = utils.confirm_monthly_report_teacher(client, rep_id, t_signer, f_teacher_rem)
+                    if succ:
+                        st.balloons()
+                        st.success("✅ Monthly report confirmed by Teacher! Submitted to Head Teacher.")
+                        time.sleep(0.7)
+                        st.rerun()
+                    else:
+                        st.error(f"Confirmation failed: {msg}")
+
+                if btn_ht_approve:
+                    succ, msg = utils.approve_monthly_report_head_teacher(client, rep_id, "Head Teacher", f_ht_recs)
+                    if succ:
+                        st.balloons()
+                        st.success("🎉 Monthly report approved by Head Teacher! Ready to export for parent.")
+                        time.sleep(0.7)
+                        st.rerun()
+                    else:
+                        st.error(f"Approval failed: {msg}")
+
+            # Download & Preview Section
+            st.markdown("---")
+            st.subheader("📥 Export & Download Report for Parent")
+            st.caption("Generate a high-resolution, printable HTML/PDF evaluation report formatted with Pinnacle Academic Services branding.")
+            
+            html_parent_report = utils.generate_monthly_report_html(rep_data)
+            
+            cdl1, cdl2 = st.columns([1, 2])
+            with cdl1:
+                st.download_button(
+                    label="📄 Download Printable Report (HTML / PDF)",
+                    data=html_parent_report,
+                    file_name=f"PAS_Monthly_Evaluation_{sel_m_student}_{sel_m_month}.html",
+                    mime="text/html",
+                    key=f"dl_parent_m_{rep_id}"
+                )
+            with cdl2:
+                st.caption("💡 **Tip:** Open the downloaded HTML file in Chrome/Edge and press `Ctrl+P` (or click the print button) to save as an official PDF to send to the parent.")
+
+            with st.expander("👁️ Preview Parent-Facing Report", expanded=False):
+                st.components.v1.html(html_parent_report, height=750, scrolling=True)
+
 # --- ADMIN DASHBOARD ---
 elif tab == "Admin Dashboard":
     st.header("📊 Admin Dashboard")
+    
+    # --- HEAD TEACHER MONTHLY REPORTS APPROVAL QUEUE ---
+    df_m_all = utils.get_monthly_reports_data(client)
+    if not df_m_all.empty and "Status" in df_m_all.columns:
+        pending_ht_reports = df_m_all[df_m_all["Status"] == "Confirmed by Teacher"]
+        if not pending_ht_reports.empty:
+            st.info(f"🔔 **Attention Head Teacher:** There are **{len(pending_ht_reports)}** monthly report(s) confirmed by teachers awaiting your final quality approval.")
+            with st.expander(f"👑 Review Pending Monthly Reports ({len(pending_ht_reports)} pending)", expanded=True):
+                for _, p_rep in pending_ht_reports.iterrows():
+                    p_st = p_rep.get("Student Name")
+                    p_mo = p_rep.get("Month")
+                    p_t = p_rep.get("Teacher Name")
+                    p_id = p_rep.get("Monthly Report ID")
+                    
+                    st.markdown(f"**Student:** `{p_st}` &nbsp;•&nbsp; **Month:** `{p_mo}` &nbsp;•&nbsp; **Teacher:** `{p_t}`")
+                    st.write(f"**Teacher Remarks:** {p_rep.get('Teacher Remarks')}")
+                    
+                    c_app1, c_app2 = st.columns([1, 1])
+                    with c_app1:
+                        if st.button(f"👑 Approve & Finalize Report for {p_st}", key=f"ht_q_app_{p_id}"):
+                            succ, msg = utils.approve_monthly_report_head_teacher(client, p_id, "Head Teacher")
+                            if succ:
+                                st.success(f"✅ Approved monthly report for {p_st}!")
+                                time.sleep(0.5)
+                                st.rerun()
+                            else:
+                                st.error(f"Error: {msg}")
+                    with c_app2:
+                        html_q = utils.generate_monthly_report_html(p_rep.to_dict())
+                        st.download_button(
+                            label=f"📥 Download Report for {p_st}",
+                            data=html_q,
+                            file_name=f"PAS_Report_{p_st}_{p_mo}.html",
+                            mime="text/html",
+                            key=f"ht_q_dl_{p_id}"
+                        )
+                    st.markdown("---")
+
     
     # --- MASTER SCHEDULE PREVIEW ---
     st.subheader("📅 Master Class Schedule")

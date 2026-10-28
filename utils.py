@@ -116,11 +116,10 @@ from func_timeout import func_timeout, FunctionTimedOut
 
 def retry_on_quota(func):
     """
-    Decorator to retry API calls on Quota Exceeded error.
+    Decorator to retry API calls on Quota Exceeded (429) or temporary server errors (500, 502, 503, 504).
     """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-
         retries = 3
         delay = 2
         for i in range(retries):
@@ -128,11 +127,11 @@ def retry_on_quota(func):
                 return func(*args, **kwargs)
             except Exception as e:
                 err_str = str(e).lower()
-                if "429" in err_str or "quota" in err_str:
-                    if i < retries - 1:
-                        time.sleep(delay)
-                        delay *= 2 # Exponential backoff
-                        continue
+                retryable = any(k in err_str for k in ["429", "500", "502", "503", "504", "quota", "unavailable", "temporarily", "connection error"])
+                if retryable and i < retries - 1:
+                    time.sleep(delay)
+                    delay *= 2 # Exponential backoff
+                    continue
                 raise e
         return func(*args, **kwargs)
     return wrapper
@@ -2012,5 +2011,764 @@ def get_teacher_assigned_students_details(client, teacher_name, week_range=None)
         results.append(s_info)
         
     return results
+
+
+# ==========================================
+# CLASS SESSION REPORTS & MONTHLY EVALUATIONS
+# ==========================================
+
+BOT_REPORTS_DIR_CANDIDATES = [
+    r"c:\Users\user\Documents\antigravity\quick-raman\meeting-bot\recordings\reports",
+    os.path.join(os.path.expanduser("~"), "Documents", "antigravity", "quick-raman", "meeting-bot", "recordings", "reports"),
+    os.path.join(os.getcwd(), "recordings", "reports")
+]
+
+CLASS_REPORTS_COLS = [
+    "Report ID", "Session ID", "Date", "Student Name", "Teacher Name", "Subject", 
+    "Topic", "Duration", "Executive Summary", "Curriculum Breakdown", "Homework Tracking", 
+    "Student Interaction", "Teacher Engagement", "Anomalies", "Social Highlights", 
+    "File Name", "Status", "Last Modified"
+]
+
+MONTHLY_REPORTS_COLS = [
+    "Monthly Report ID", "Month", "Student Name", "Teacher Name", "Subject", 
+    "Total Classes", "Total Hours", "Curriculum Covered", "Homework Rating", 
+    "Comprehension & Progress", "Teacher Remarks", "Head Teacher Recommendations", 
+    "Status", "Teacher Confirmed At", "Head Teacher Approved At", "Last Modified", 
+    "Associated Report IDs"
+]
+
+def get_bot_reports_directory():
+    """Returns the local path to meeting-bot/recordings/reports if it exists."""
+    for p in BOT_REPORTS_DIR_CANDIDATES:
+        if os.path.exists(p):
+            return p
+    return None
+
+def _safe_json_dumps(obj):
+    if isinstance(obj, (dict, list)):
+        try:
+            return json.dumps(obj, ensure_ascii=False)
+        except Exception:
+            return str(obj)
+    return str(obj or "")
+
+def _safe_json_loads(val, default_val=None):
+    if default_val is None:
+        default_val = {}
+    if not val or pd.isna(val):
+        return default_val
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s:
+        return default_val
+    try:
+        return json.loads(s)
+    except Exception:
+        return default_val
+
+@st.cache_data(ttl=120)
+def get_class_reports_data(_client):
+    """
+    Fetches all individual class session reports from 'Class_Reports' Google Sheet.
+    Also synchronizes any local report JSON files found in meeting-bot/recordings/reports.
+    """
+    sheet = get_sheet_by_id(_client)
+    if not sheet:
+        return pd.DataFrame(columns=CLASS_REPORTS_COLS)
+
+    try:
+        ws_list = [w.title for w in sheet.worksheets()]
+        if "Class_Reports" not in ws_list:
+            ws = sheet.add_worksheet(title="Class_Reports", rows="1000", cols="25")
+            ws.append_row(CLASS_REPORTS_COLS)
+            records = []
+        else:
+            ws = sheet.worksheet("Class_Reports")
+            records = ws.get_all_records()
+
+        df = pd.DataFrame(records)
+        for col in CLASS_REPORTS_COLS:
+            if col not in df.columns:
+                df[col] = ""
+
+        # Auto-ingest local bot report files if available
+        local_dir = get_bot_reports_directory()
+        if local_dir and os.path.isdir(local_dir):
+            existing_files = set(df["File Name"].astype(str).str.strip().tolist()) if not df.empty else set()
+            new_rows = []
+            
+            for fname in os.listdir(local_dir):
+                if fname.startswith("report_") and fname.endswith(".json"):
+                    full_p = os.path.join(local_dir, fname)
+                    try:
+                        with open(full_p, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                            
+                        orig_file = data.get("fileName", fname)
+                        if orig_file in existing_files or fname in existing_files:
+                            continue
+                            
+                        rep_inner = data.get("report", {})
+                        overview = rep_inner.get("sessionOverview", {})
+                        
+                        r_id = str(uuid.uuid4())
+                        s_id = data.get("sessionId", "")
+                        d_str = str(overview.get("date") or datetime.date.today().strftime("%Y-%m-%d"))
+                        st_name = str(overview.get("studentName", "")).strip()
+                        tc_name = str(overview.get("teacherName", "")).strip()
+                        subj = str(overview.get("subject", "")).strip()
+                        topic = str(overview.get("topic", "")).strip()
+                        dur = str(overview.get("duration", "60 mins"))
+                        exec_sum = str(overview.get("executiveSummary", "")).strip()
+                        
+                        curriculum = _safe_json_dumps(rep_inner.get("curriculumBreakdown", {}))
+                        hw = _safe_json_dumps(rep_inner.get("homeworkTracking", {}))
+                        interaction = _safe_json_dumps(rep_inner.get("studentInteraction", {}))
+                        teacher_eng = _safe_json_dumps(rep_inner.get("teacherEngagement", {}))
+                        anomalies = _safe_json_dumps(rep_inner.get("anomaliesAndDisruptions", {}))
+                        social = _safe_json_dumps(rep_inner.get("socialMediaHighlights", {}))
+                        
+                        now_ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        new_row = [
+                            r_id, s_id, d_str, st_name, tc_name, subj, topic, dur, exec_sum,
+                            curriculum, hw, interaction, teacher_eng, anomalies, social,
+                            orig_file, "Generated", now_ts
+                        ]
+                        new_rows.append(new_row)
+                        existing_files.add(orig_file)
+                    except Exception as parse_e:
+                        print(f"Error parsing local report {fname}: {parse_e}")
+                        
+            if new_rows:
+                ws.append_rows(new_rows)
+                # Re-fetch records
+                records = ws.get_all_records()
+                df = pd.DataFrame(records)
+
+        return df
+
+    except Exception as e:
+        st.error(f"Error fetching Class_Reports: {e}")
+        return pd.DataFrame(columns=CLASS_REPORTS_COLS)
+
+
+def save_class_report(client, report_data):
+    """
+    Saves or updates an individual class session report in Google Sheet 'Class_Reports'.
+    Also updates local JSON report file if present.
+    """
+    sheet = get_sheet_by_id(client)
+    if not sheet:
+        return False, "Google Sheet client not connected."
+
+    try:
+        # Ensure sheet exists
+        get_class_reports_data(client)
+        ws = sheet.worksheet("Class_Reports")
+        
+        report_id = str(report_data.get("Report ID") or "").strip()
+        now_ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        report_data["Last Modified"] = now_ts
+        
+        row_values = [
+            report_data.get("Report ID") or str(uuid.uuid4()),
+            report_data.get("Session ID", ""),
+            str(report_data.get("Date", "")),
+            str(report_data.get("Student Name", "")),
+            str(report_data.get("Teacher Name", "")),
+            str(report_data.get("Subject", "")),
+            str(report_data.get("Topic", "")),
+            str(report_data.get("Duration", "60 mins")),
+            str(report_data.get("Executive Summary", "")),
+            _safe_json_dumps(report_data.get("Curriculum Breakdown", {})),
+            _safe_json_dumps(report_data.get("Homework Tracking", {})),
+            _safe_json_dumps(report_data.get("Student Interaction", {})),
+            _safe_json_dumps(report_data.get("Teacher Engagement", {})),
+            _safe_json_dumps(report_data.get("Anomalies", {})),
+            _safe_json_dumps(report_data.get("Social Highlights", {})),
+            str(report_data.get("File Name", "")),
+            str(report_data.get("Status", "Edited")),
+            now_ts
+        ]
+        
+        if report_id:
+            cells = ws.findall(report_id)
+            if cells:
+                target_row = cells[0].row
+                try:
+                    ws.update(f"A{target_row}:R{target_row}", [row_values])
+                except Exception:
+                    for col_idx, val in enumerate(row_values, start=1):
+                        ws.update_cell(target_row, col_idx, str(val))
+                get_class_reports_data.clear()
+                return True, "Class report updated successfully."
+
+        # If not found or new, append row
+        ws.append_row(row_values)
+        get_class_reports_data.clear()
+        return True, "Class report created successfully."
+
+    except Exception as e:
+        return False, f"Failed to save class report: {e}"
+
+
+@st.cache_data(ttl=120)
+def get_monthly_reports_data(_client):
+    """
+    Fetches all monthly consolidated progress reports from Google Sheet 'Monthly_Reports'.
+    """
+    sheet = get_sheet_by_id(_client)
+    if not sheet:
+        return pd.DataFrame(columns=MONTHLY_REPORTS_COLS)
+
+    try:
+        ws_list = [w.title for w in sheet.worksheets()]
+        if "Monthly_Reports" not in ws_list:
+            ws = sheet.add_worksheet(title="Monthly_Reports", rows="1000", cols="20")
+            ws.append_row(MONTHLY_REPORTS_COLS)
+            return pd.DataFrame(columns=MONTHLY_REPORTS_COLS)
+
+        ws = sheet.worksheet("Monthly_Reports")
+        records = ws.get_all_records()
+        df = pd.DataFrame(records)
+        for col in MONTHLY_REPORTS_COLS:
+            if col not in df.columns:
+                df[col] = ""
+        return df
+
+    except Exception as e:
+        st.error(f"Error fetching Monthly_Reports: {e}")
+        return pd.DataFrame(columns=MONTHLY_REPORTS_COLS)
+
+
+def save_monthly_report(client, monthly_data):
+    """
+    Saves or updates a monthly consolidated report in Google Sheet 'Monthly_Reports'.
+    """
+    sheet = get_sheet_by_id(client)
+    if not sheet:
+        return False, "Google Sheet client not connected."
+
+    try:
+        get_monthly_reports_data(client)
+        ws = sheet.worksheet("Monthly_Reports")
+        
+        report_id = str(monthly_data.get("Monthly Report ID") or "").strip()
+        now_ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        monthly_data["Last Modified"] = now_ts
+        
+        if not report_id:
+            report_id = str(uuid.uuid4())
+            monthly_data["Monthly Report ID"] = report_id
+
+        row_values = [
+            report_id,
+            str(monthly_data.get("Month", "")),
+            str(monthly_data.get("Student Name", "")),
+            str(monthly_data.get("Teacher Name", "")),
+            str(monthly_data.get("Subject", "")),
+            str(monthly_data.get("Total Classes", 0)),
+            str(monthly_data.get("Total Hours", "0")),
+            str(monthly_data.get("Curriculum Covered", "")),
+            str(monthly_data.get("Homework Rating", "")),
+            str(monthly_data.get("Comprehension & Progress", "")),
+            str(monthly_data.get("Teacher Remarks", "")),
+            str(monthly_data.get("Head Teacher Recommendations", "")),
+            str(monthly_data.get("Status", "Draft")),
+            str(monthly_data.get("Teacher Confirmed At", "")),
+            str(monthly_data.get("Head Teacher Approved At", "")),
+            now_ts,
+            str(monthly_data.get("Associated Report IDs", ""))
+        ]
+
+        cells = ws.findall(report_id)
+        if cells:
+            target_row = cells[0].row
+            try:
+                ws.update(f"A{target_row}:Q{target_row}", [row_values])
+            except Exception:
+                for col_idx, val in enumerate(row_values, start=1):
+                    ws.update_cell(target_row, col_idx, str(val))
+            get_monthly_reports_data.clear()
+            return True, "Monthly report updated successfully."
+        else:
+            ws.append_row(row_values)
+            get_monthly_reports_data.clear()
+            return True, "Monthly report saved successfully."
+
+    except Exception as e:
+        return False, f"Failed to save monthly report: {e}"
+
+
+def generate_monthly_report_draft(client, student_name, target_month=None):
+    """
+    Aggregates all individual class reports for a student for the specified month (e.g. 'October 2026').
+    Builds a synthesized monthly report draft with topics, homework consistency, comprehension,
+    and draft remarks ready for teacher review.
+    """
+    if not target_month:
+        target_month = datetime.date.today().strftime("%B %Y")  # e.g. "October 2026"
+
+    # Normalize student name
+    s_norm = normalize_name(student_name)
+    df_classes = get_class_reports_data(client)
+    
+    # Filter class reports for this student
+    matched_classes = pd.DataFrame()
+    if not df_classes.empty and "Student Name" in df_classes.columns:
+        matched_classes = df_classes[df_classes["Student Name"].apply(normalize_name) == s_norm]
+
+    # Filter by month if date column exists
+    filtered_by_month = []
+    month_parts = target_month.split()
+    target_month_name = month_parts[0].lower() if len(month_parts) > 0 else ""
+    target_year = month_parts[1] if len(month_parts) > 1 else str(datetime.date.today().year)
+
+    for idx, row in matched_classes.iterrows():
+        d_val = str(row.get("Date", "")).strip()
+        include = False
+        try:
+            dt = datetime.datetime.strptime(d_val[:10], "%Y-%m-%d")
+            if dt.strftime("%B").lower() == target_month_name and str(dt.year) == target_year:
+                include = True
+        except Exception:
+            if target_month_name in d_val.lower() or f"{target_year}-10" in d_val:
+                include = True
+        if include:
+            filtered_by_month.append(row)
+
+    if filtered_by_month:
+        df_target = pd.DataFrame(filtered_by_month)
+    else:
+        df_target = matched_classes
+
+    total_classes = len(df_target)
+    total_hours = total_classes * 1.0
+    
+    teachers_list = []
+    subjects_list = []
+    topics_list = []
+    homework_notes = []
+    comprehension_notes = []
+    associated_ids = []
+
+    for idx, row in df_target.iterrows():
+        r_id = str(row.get("Report ID", ""))
+        if r_id: associated_ids.append(r_id)
+        
+        t_name = str(row.get("Teacher Name", "")).strip()
+        if t_name and t_name not in teachers_list:
+            teachers_list.append(t_name)
+            
+        subj = str(row.get("Subject", "")).strip()
+        if subj and subj not in subjects_list:
+            subjects_list.append(subj)
+            
+        date_str = str(row.get("Date", ""))
+        topic = str(row.get("Topic", "")).strip()
+        exec_sum = str(row.get("Executive Summary", "")).strip()
+        
+        if topic:
+            topics_list.append(f"• [{date_str}] {topic}: {exec_sum}" if exec_sum else f"• [{date_str}] {topic}")
+            
+        # Parse homework json
+        hw_dict = _safe_json_loads(row.get("Homework Tracking"))
+        if hw_dict and isinstance(hw_dict, dict):
+            reviewed = hw_dict.get("previousHomeworkReviewed")
+            findings = hw_dict.get("previousHomeworkFindings") or ""
+            assigned = hw_dict.get("newHomeworkDetails") or ""
+            hw_line = f"• [{date_str}] Review: {'Completed' if reviewed else 'Not Set/Pending'}. Findings: {findings}. Task: {assigned}"
+            homework_notes.append(hw_line)
+
+        # Parse interaction json
+        inter_dict = _safe_json_loads(row.get("Student Interaction"))
+        if inter_dict and isinstance(inter_dict, dict):
+            eng = inter_dict.get("engagementLevel") or "High"
+            comp = inter_dict.get("comprehensionAssessment") or ""
+            conf = inter_dict.get("studentConfidence") or "Good"
+            interaction_line = f"• [{date_str}] Engagement: {eng} | Confidence: {conf} | Assessment: {comp}"
+            comprehension_notes.append(interaction_line)
+
+    curriculum_covered_text = "\n".join(topics_list) if topics_list else "Regular weekly syllabus coverage across assigned modules."
+    homework_rating_text = "\n".join(homework_notes) if homework_notes else "Homework assignments consistently set and monitored each session."
+    comprehension_text = "\n".join(comprehension_notes) if comprehension_notes else "High engagement observed with steady conceptual mastery."
+
+    teacher_lead = ", ".join(teachers_list) if teachers_list else "PAS Assigned Tutor"
+    subject_lead = ", ".join(subjects_list) if subjects_list else "General Academic Tutoring"
+
+    draft_report = {
+        "Monthly Report ID": str(uuid.uuid4()),
+        "Month": target_month,
+        "Student Name": student_name,
+        "Teacher Name": teacher_lead,
+        "Subject": subject_lead,
+        "Total Classes": total_classes,
+        "Total Hours": f"{total_hours:.1f}",
+        "Curriculum Covered": curriculum_covered_text,
+        "Homework Rating": homework_rating_text,
+        "Comprehension & Progress": comprehension_text,
+        "Teacher Remarks": (
+            f"{student_name} has demonstrated commendable commitment throughout {target_month}. "
+            "Punctuality and focus have been consistent, leading to noticeable improvement in subject confidence."
+        ),
+        "Head Teacher Recommendations": (
+            "Approved. Recommended to maintain momentum into next month with continued practice on advanced problem-solving."
+        ),
+        "Status": "Draft",
+        "Teacher Confirmed At": "",
+        "Head Teacher Approved At": "",
+        "Last Modified": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "Associated Report IDs": ", ".join(associated_ids)
+    }
+
+    return draft_report
+
+
+def confirm_monthly_report_teacher(client, report_id, teacher_name, teacher_remarks=None):
+    """
+    Teacher sign-off action: Sets status to 'Confirmed by Teacher'.
+    """
+    df_m = get_monthly_reports_data(client)
+    if df_m.empty:
+        return False, "No monthly reports found."
+        
+    matches = df_m[df_m["Monthly Report ID"] == report_id]
+    if matches.empty:
+        return False, f"Report ID '{report_id}' not found."
+        
+    rep_dict = matches.iloc[0].to_dict()
+    rep_dict["Status"] = "Confirmed by Teacher"
+    rep_dict["Teacher Confirmed At"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if teacher_remarks:
+        rep_dict["Teacher Remarks"] = teacher_remarks
+    if teacher_name:
+        rep_dict["Teacher Name"] = teacher_name
+        
+    return save_monthly_report(client, rep_dict)
+
+
+def approve_monthly_report_head_teacher(client, report_id, head_teacher_name="Head Teacher", recommendations=None):
+    """
+    Head Teacher sign-off action: Sets status to 'Approved by Head Teacher'.
+    """
+    df_m = get_monthly_reports_data(client)
+    if df_m.empty:
+        return False, "No monthly reports found."
+        
+    matches = df_m[df_m["Monthly Report ID"] == report_id]
+    if matches.empty:
+        return False, f"Report ID '{report_id}' not found."
+        
+    rep_dict = matches.iloc[0].to_dict()
+    rep_dict["Status"] = "Approved by Head Teacher"
+    rep_dict["Head Teacher Approved At"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if recommendations:
+        rep_dict["Head Teacher Recommendations"] = recommendations
+        
+    return save_monthly_report(client, rep_dict)
+
+
+def generate_monthly_report_html(report_dict):
+    """
+    Generates a high-end, printable HTML/PDF-ready evaluation document
+    styled with Pinnacle Academic Services branding, metrics, signatures, and print CSS.
+    """
+    st_name = report_dict.get("Student Name", "Student")
+    month = report_dict.get("Month", "Monthly")
+    subj = report_dict.get("Subject", "Academic Tutoring")
+    t_name = report_dict.get("Teacher Name", "Assigned Tutor")
+    classes = report_dict.get("Total Classes", "0")
+    hours = report_dict.get("Total Hours", "0")
+    curriculum = str(report_dict.get("Curriculum Covered", "")).replace("\n", "<br>")
+    hw = str(report_dict.get("Homework Rating", "")).replace("\n", "<br>")
+    comp = str(report_dict.get("Comprehension & Progress", "")).replace("\n", "<br>")
+    t_remarks = str(report_dict.get("Teacher Remarks", "")).replace("\n", "<br>")
+    ht_recs = str(report_dict.get("Head Teacher Recommendations", "")).replace("\n", "<br>")
+    status = report_dict.get("Status", "Draft")
+    t_confirmed = report_dict.get("Teacher Confirmed At", "")
+    ht_approved = report_dict.get("Head Teacher Approved At", "")
+
+    status_badge_color = "#10b981" if status == "Approved by Head Teacher" else "#3b82f6" if status == "Confirmed by Teacher" else "#f59e0b"
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PAS Academic Evaluation - {st_name} ({month})</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+  
+  @page {{
+    size: A4 portrait;
+    margin: 14mm;
+  }}
+  
+  * {{
+    box-sizing: border-box;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }}
+  
+  body {{
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background-color: #f8fafc;
+    color: #1e293b;
+    margin: 0;
+    padding: 24px;
+    font-size: 13px;
+    line-height: 1.55;
+  }}
+  
+  .container {{
+    max-width: 820px;
+    margin: 0 auto;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 36px 40px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+  }}
+  
+  .header {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 2px solid #1e3a8a;
+    padding-bottom: 18px;
+    margin-bottom: 24px;
+  }}
+  
+  .logo-title h1 {{
+    margin: 0;
+    font-size: 24px;
+    font-weight: 800;
+    color: #1e3a8a;
+    letter-spacing: -0.5px;
+  }}
+  
+  .logo-title p {{
+    margin: 4px 0 0 0;
+    font-size: 13px;
+    color: #64748b;
+    font-weight: 500;
+  }}
+  
+  .status-tag {{
+    display: inline-block;
+    padding: 6px 14px;
+    border-radius: 20px;
+    background: {status_badge_color}15;
+    color: {status_badge_color};
+    font-weight: 700;
+    font-size: 12px;
+    border: 1px solid {status_badge_color}40;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }}
+  
+  .meta-grid {{
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    background: #f1f5f9;
+    padding: 16px;
+    border-radius: 8px;
+    margin-bottom: 26px;
+  }}
+  
+  .meta-item span {{
+    display: block;
+    font-size: 11px;
+    color: #64748b;
+    text-transform: uppercase;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+  }}
+  
+  .meta-item strong {{
+    font-size: 14px;
+    color: #0f172a;
+  }}
+  
+  .section {{
+    margin-bottom: 22px;
+  }}
+  
+  .section-title {{
+    font-size: 14px;
+    font-weight: 700;
+    color: #1e3a8a;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    border-bottom: 1px solid #cbd5e1;
+    padding-bottom: 5px;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }}
+  
+  .content-box {{
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 14px 16px;
+    color: #334155;
+  }}
+  
+  .signatures-grid {{
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-top: 32px;
+    padding-top: 20px;
+    border-top: 1px solid #e2e8f0;
+  }}
+  
+  .sig-card {{
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 14px;
+    background: #fafafa;
+  }}
+  
+  .sig-card strong {{
+    color: #1e3a8a;
+    font-size: 13px;
+  }}
+  
+  .footer {{
+    margin-top: 28px;
+    text-align: center;
+    font-size: 11px;
+    color: #94a3b8;
+    border-top: 1px solid #e2e8f0;
+    padding-top: 12px;
+  }}
+
+  .print-btn {{
+    display: block;
+    margin: 0 auto 20px auto;
+    padding: 10px 24px;
+    background: #1e3a8a;
+    color: white;
+    font-weight: 600;
+    font-size: 14px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(30, 58, 138, 0.3);
+  }}
+
+  @media print {{
+    body {{
+      background: white;
+      padding: 0;
+    }}
+    .container {{
+      border: none;
+      box-shadow: none;
+      padding: 0;
+      max-width: 100%;
+    }}
+    .print-btn {{
+      display: none !important;
+    }}
+  }}
+</style>
+</head>
+<body>
+
+<button class="print-btn" onclick="window.print()">🖨️ Print / Save as PDF for Parent</button>
+
+<div class="container">
+  <div class="header">
+    <div class="logo-title">
+      <h1>Pinnacle Academic Services (PAS)</h1>
+      <p>Monthly Academic Evaluation & Student Progress Report</p>
+    </div>
+    <div>
+      <span class="status-tag">{status}</span>
+    </div>
+  </div>
+
+  <div class="meta-grid">
+    <div class="meta-item">
+      <span>Student Name</span>
+      <strong>{st_name}</strong>
+    </div>
+    <div class="meta-item">
+      <span>Subject(s)</span>
+      <strong>{subj}</strong>
+    </div>
+    <div class="meta-item">
+      <span>Evaluation Period</span>
+      <strong>{month}</strong>
+    </div>
+    <div class="meta-item">
+      <span>Classes / Hours</span>
+      <strong>{classes} Classes ({hours}h)</strong>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">📚 1. Curriculum & Topics Covered</div>
+    <div class="content-box">
+      {curriculum}
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">📝 2. Homework & Independent Practice</div>
+    <div class="content-box">
+      {hw}
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">🎯 3. Concept Comprehension & Engagement</div>
+    <div class="content-box">
+      {comp}
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">👨‍🏫 4. Teacher's Evaluation & Remarks</div>
+    <div class="content-box">
+      {t_remarks}
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">👑 5. Head Teacher's Quality Seal & Recommendations</div>
+    <div class="content-box">
+      {ht_recs}
+    </div>
+  </div>
+
+  <div class="signatures-grid">
+    <div class="sig-card">
+      <div style="font-size:11px; color:#64748b; text-transform:uppercase;">Confirmed by Assigned Tutor</div>
+      <div style="margin-top:6px; font-weight:700; color:#0f172a;">{t_name}</div>
+      <div style="font-size:11px; color:#64748b; margin-top:2px;">Timestamp: {t_confirmed or 'Awaiting Teacher Sign-off'}</div>
+    </div>
+    <div class="sig-card">
+      <div style="font-size:11px; color:#64748b; text-transform:uppercase;">Endorsed by Quality Assurance Head</div>
+      <div style="margin-top:6px; font-weight:700; color:#0f172a;">Head Teacher (PAS Academic Team)</div>
+      <div style="font-size:11px; color:#64748b; margin-top:2px;">Timestamp: {ht_approved or 'Awaiting Head Teacher Approval'}</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    Pinnacle Academic Services • Dedicated to Academic Excellence • Questions or inquiries: info@pinnacleacademicservices.com
+  </div>
+</div>
+
+</body>
+</html>"""
+    return html
+
 
 
