@@ -14,12 +14,16 @@ import streamlit.components.v1 as components
 
 PAS_BOARD_BASE_URL = "https://pas-recorder.duckdns.org/board"
 
-def get_student_room_code(student_name):
-    clean = "".join(ch for ch in str(student_name or "").upper() if ch.isalnum())
-    return f"PAS{clean[:5]}" if clean else "PAS101"
+import hashlib
+
+def get_student_room_code(student_name, teacher_name=""):
+    clean_s = "".join(ch for ch in str(student_name or "").upper() if ch.isalnum())[:4] or "CLS"
+    seed = f"{str(teacher_name).strip().lower()}:{str(student_name).strip().lower()}"
+    short_hash = hashlib.md5(seed.encode("utf-8")).hexdigest()[:3].upper()
+    return f"P{clean_s}{short_hash}"
 
 def get_pas_board_link(room_code="PAS101", role="tutor", user_name="", title=""):
-    clean_room = "".join(ch for ch in str(room_code).upper() if ch.isalnum())[:8] or "PAS101"
+    clean_room = "".join(ch for ch in str(room_code).upper() if ch.isalnum())[:10] or "PAS101"
     params = {"room": clean_room, "role": role}
     if user_name:
         params["name"] = str(user_name).strip()
@@ -328,7 +332,7 @@ if portal_mode == "teacher" or teacher_param:
                 c_end = c_row.get("EndTime", "")
                 c_dur = c_row.get("Duration", "")
                 c_link = str(c_row.get("MeetingLink", "")).strip()
-                c_room = get_student_room_code(c_st)
+                c_room = get_student_room_code(c_st, teacher_name)
                 c_board_tutor = get_pas_board_link(c_room, "tutor", teacher_name, f"{c_subj} - {c_st}")
                 c_board_student = get_pas_board_link(c_room, "student", c_st, f"{c_subj} - {c_st}")
                 
@@ -651,7 +655,7 @@ if portal_mode == "teacher" or teacher_param:
             wb_student_opts = [s.get("Student Name") for s in assigned_students if s.get("Student Name")] if assigned_students else ["General Classroom"]
             sel_wb_student = st.selectbox("Select Student Classroom", wb_student_opts, key="tp_wb_student")
         with wb_col2:
-            default_wb_room = get_student_room_code(sel_wb_student) if sel_wb_student != "General Classroom" else "PAS101"
+            default_wb_room = get_student_room_code(sel_wb_student, teacher_name) if sel_wb_student != "General Classroom" else "PAS101"
             wb_room_code = st.text_input("Classroom Code", value=default_wb_room, key=f"tp_wb_room_{sel_wb_student}").strip().upper()
         with wb_col3:
             tutor_wb_url = get_pas_board_link(wb_room_code, "tutor", teacher_name, f"PAS Session - {sel_wb_student}")
