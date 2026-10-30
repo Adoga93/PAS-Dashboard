@@ -10,6 +10,22 @@ except Exception:
 import time
 import datetime
 import urllib.parse
+import streamlit.components.v1 as components
+
+PAS_BOARD_BASE_URL = "https://pas-recorder.duckdns.org/board"
+
+def get_student_room_code(student_name):
+    clean = "".join(ch for ch in str(student_name or "").upper() if ch.isalnum())
+    return f"PAS{clean[:5]}" if clean else "PAS101"
+
+def get_pas_board_link(room_code="PAS101", role="tutor", user_name="", title=""):
+    clean_room = "".join(ch for ch in str(room_code).upper() if ch.isalnum())[:8] or "PAS101"
+    params = {"room": clean_room, "role": role}
+    if user_name:
+        params["name"] = str(user_name).strip()
+    if title:
+        params["title"] = str(title).strip()
+    return f"{PAS_BOARD_BASE_URL}/?{urllib.parse.urlencode(params)}"
 
 def get_teacher_portal_link(teacher_name, base_url=None):
     if hasattr(utils, "generate_teacher_portal_link"):
@@ -291,10 +307,11 @@ if portal_mode == "teacher" or teacher_param:
     st.markdown("---")
 
     # Primary Workspace Tabs
-    portal_tab0, portal_tab1, portal_tab2 = st.tabs([
+    portal_tab0, portal_tab1, portal_tab2, portal_tab3 = st.tabs([
         f"📅 Today's Schedule ({today_count})",
         "👥 My Students & Weekly Planning", 
-        f"🚀 Weekly Master Schedule ({total_weekly_count})"
+        f"🚀 Weekly Master Schedule ({total_weekly_count})",
+        "✏️ Interactive PAS Whiteboard"
     ])
     
     # TAB 0: TODAY'S CLASSES (DEFAULT VIEW)
@@ -311,12 +328,17 @@ if portal_mode == "teacher" or teacher_param:
                 c_end = c_row.get("EndTime", "")
                 c_dur = c_row.get("Duration", "")
                 c_link = str(c_row.get("MeetingLink", "")).strip()
+                c_room = get_student_room_code(c_st)
+                c_board_tutor = get_pas_board_link(c_room, "tutor", teacher_name, f"{c_subj} - {c_st}")
+                c_board_student = get_pas_board_link(c_room, "student", c_st, f"{c_subj} - {c_st}")
                 
                 meet_btn_html = ""
                 if c_link and (c_link.startswith("http://") or c_link.startswith("https://")):
-                    meet_btn_html = f'<a href="{c_link}" target="_blank" style="display: inline-block; background: #2563eb; color: white; text-decoration: none; padding: 9px 18px; border-radius: 8px; font-weight: 600; font-size: 13px; margin-top: 6px;">👉 Join Meeting Room</a>'
+                    meet_btn_html = f'<a href="{c_link}" target="_blank" style="display: inline-block; background: #2563eb; color: white; text-decoration: none; padding: 9px 16px; border-radius: 8px; font-weight: 600; font-size: 13px; margin-top: 6px; margin-right: 6px;">👉 Join Meeting Room</a>'
                 else:
-                    meet_btn_html = '<span style="color: #94a3b8; font-size: 13px;">No meeting link attached</span>'
+                    meet_btn_html = '<span style="color: #94a3b8; font-size: 13px; margin-right: 8px;">No meeting link attached</span>'
+                
+                board_btn_html = f'<a href="{c_board_tutor}" target="_blank" style="display: inline-block; background: #0f172a; color: #2dd4bf; border: 1px solid #14b8a6; text-decoration: none; padding: 8px 15px; border-radius: 8px; font-weight: 600; font-size: 13px; margin-top: 6px;">✏️ Open PAS Whiteboard ({c_room})</a>'
                     
                 st.markdown(f"""
                 <div style="background: white; border-left: 5px solid #2563eb; border-radius: 10px; padding: 18px 22px; margin-bottom: 16px; box-shadow: 0 2px 10px rgba(0,0,0,0.06); border-top: 1px solid #f1f5f9; border-right: 1px solid #f1f5f9; border-bottom: 1px solid #f1f5f9;">
@@ -324,10 +346,12 @@ if portal_mode == "teacher" or teacher_param:
                         <div>
                             <span style="background: #2563eb; color: white; padding: 3px 12px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase;">⏳ Scheduled Today</span>
                             <h3 style="margin: 6px 0 6px 0; color: #0f172a; font-size: 19px; font-weight: 700;">{c_subj} with {c_st}</h3>
-                            <p style="margin: 0; color: #475569; font-size: 14px;">⏰ Time: <strong>{c_time} - {c_end}</strong> ({c_dur})</p>
+                            <p style="margin: 0; color: #475569; font-size: 14px;">⏰ Time: <strong>{c_time} - {c_end}</strong> ({c_dur}) &nbsp;•&nbsp; 🎨 Board Room: <code>{c_room}</code></p>
                         </div>
                         <div style="margin-top: 8px; text-align: right;">
                             {meet_btn_html}
+                            {board_btn_html}
+                            <div style="font-size: 11px; color: #64748b; margin-top: 5px;">Student Board Link: <a href="{c_board_student}" target="_blank" style="color: #0284c7;">{c_board_student}</a></div>
                         </div>
                     </div>
                 </div>
@@ -617,6 +641,30 @@ if portal_mode == "teacher" or teacher_param:
                 )
             else:
                 st.info("No monthly report generated yet for this student. Click 'Generate / Refresh Monthly Draft' above to aggregate their class reports.")
+
+    # TAB 3: INTERACTIVE PAS WHITEBOARD FOR THIS TEACHER
+    with portal_tab3:
+        st.subheader("✏️ PAS Interactive Classroom Whiteboard")
+        st.caption("Write, draw on 4-line handwriting or math grids, import PDF worksheets, and collaborate live in real time with your students.")
+        
+        wb_col1, wb_col2, wb_col3 = st.columns([1.5, 1, 1.5])
+        with wb_col1:
+            wb_student_opts = [s.get("Student Name") for s in assigned_students if s.get("Student Name")] if assigned_students else ["General Classroom"]
+            sel_wb_student = st.selectbox("Select Student Classroom", wb_student_opts, key="tp_wb_student")
+        with wb_col2:
+            default_wb_room = get_student_room_code(sel_wb_student) if sel_wb_student != "General Classroom" else "PAS101"
+            wb_room_code = st.text_input("Classroom Code", value=default_wb_room, key=f"tp_wb_room_{sel_wb_student}").strip().upper()
+        with wb_col3:
+            tutor_wb_url = get_pas_board_link(wb_room_code, "tutor", teacher_name, f"PAS Session - {sel_wb_student}")
+            student_wb_url = get_pas_board_link(wb_room_code, "student", sel_wb_student, f"PAS Session - {sel_wb_student}")
+            st.markdown(f"""
+            <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 14px; font-size: 12px;">
+                <div><strong>🎨 Fullscreen Tutor Board:</strong> <a href="{tutor_wb_url}" target="_blank" style="color: #2563eb; font-weight: 700;">Open in New Tab ↗</a></div>
+                <div style="margin-top: 4px;"><strong>🎓 Student Invite Link:</strong> <a href="{student_wb_url}" target="_blank" style="color: #0d9488; font-weight: 600;">{student_wb_url}</a></div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        components.iframe(src=tutor_wb_url, height=820, scrolling=True)
                 
     st.stop() # CRITICAL: Teacher cannot view or execute admin dashboard
 
@@ -635,7 +683,7 @@ if st.sidebar.button("🔄 Sync with Database (Refresh)"):
     st.rerun()
 
 st.sidebar.markdown("---")
-tab = st.sidebar.radio("Navigate to", ["Student Tab", "Teacher Tab", "Registration", "Class & Monthly Reports", "Admin Dashboard"])
+tab = st.sidebar.radio("Navigate to", ["Student Tab", "Teacher Tab", "✏️ PAS Whiteboard", "Registration", "Class & Monthly Reports", "Admin Dashboard"])
 
 # --- STUDENT TAB ---
 if tab == "Student Tab":
@@ -814,6 +862,54 @@ if tab == "Student Tab":
                      st.error(f"❌ {msg}")
              else:
                  st.warning("Please enter code and name.")
+
+    st.markdown("---")
+    st.subheader("✏️ Interactive PAS Classroom Whiteboard")
+    with st.expander("🎨 Join Live PAS Whiteboard Session (Students & Tutors)", expanded=True):
+        df_st_wb = utils.get_students_data(client)
+        st_wb_names = sorted([s for s in df_st_wb["Student Name"].dropna().unique() if str(s).strip()]) if not df_st_wb.empty and "Student Name" in df_st_wb.columns else []
+        c_swb1, c_swb2, c_swb3 = st.columns([1.5, 1, 1])
+        with c_swb1:
+            sel_st_wb = st.selectbox("Select Your Name (or Custom Room)", ["Custom Room Code"] + st_wb_names, key="st_portal_wb_sel")
+        with c_swb2:
+            def_st_room = get_student_room_code(sel_st_wb) if sel_st_wb != "Custom Room Code" else "PAS101"
+            st_room_input = st.text_input("Classroom Room Code", value=def_st_room, key=f"st_wb_code_{sel_st_wb}").strip().upper()
+        with c_swb3:
+            st_role_choice = st.radio("Join As", ["student", "tutor"], format_func=lambda r: "🎓 Student" if r == "student" else "👨‍🏫 PAS Tutor", horizontal=True, key="st_wb_role")
+        
+        st_display_name = sel_st_wb if sel_st_wb != "Custom Room Code" else ("Student" if st_role_choice == "student" else "PAS Tutor")
+        live_wb_url = get_pas_board_link(st_room_input, st_role_choice, st_display_name)
+        st.markdown(f"👉 **[Open Fullscreen PAS Whiteboard in New Tab ({st_room_input})]({live_wb_url})** &nbsp;•&nbsp; Shareable Student Link: `{get_pas_board_link(st_room_input, 'student')}`")
+        if st.checkbox("Embed Interactive Whiteboard directly on this page", value=False, key="st_tab_embed_wb"):
+            components.iframe(src=live_wb_url, height=820, scrolling=True)
+
+# --- PAS WHITEBOARD TAB ---
+elif tab == "✏️ PAS Whiteboard":
+    st.header("✏️ PAS Board — Live Interactive Classroom Whiteboard")
+    st.caption("Real-time multiplayer Jamboard with 4-line primary handwriting guides, early learner boxed sheets, math grids, PDF worksheet import, and 150% comfort zoom.")
+    
+    df_st_board = utils.get_students_data(client)
+    st_board_names = sorted([s for s in df_st_board["Student Name"].dropna().unique() if str(s).strip()]) if not df_st_board.empty and "Student Name" in df_st_board.columns else []
+    
+    b_col1, b_col2, b_col3, b_col4 = st.columns([1.4, 1, 1, 1.6])
+    with b_col1:
+        sel_board_student = st.selectbox("Select Student Classroom", ["General Room (PAS101)"] + st_board_names, key="main_wb_student")
+    with b_col2:
+        default_main_room = get_student_room_code(sel_board_student) if sel_board_student != "General Room (PAS101)" else "PAS101"
+        main_room_code = st.text_input("Room Code", value=default_main_room, key=f"main_wb_room_{sel_board_student}").strip().upper()
+    with b_col3:
+        main_role = st.radio("Role", ["tutor", "student"], format_func=lambda r: "👨‍🏫 Tutor" if r == "tutor" else "🎓 Student", horizontal=True, key="main_wb_role")
+    with b_col4:
+        main_board_url = get_pas_board_link(main_room_code, main_role, sel_board_student if main_role == "student" and sel_board_student != "General Room (PAS101)" else "")
+        student_share_url = get_pas_board_link(main_room_code, "student", sel_board_student if sel_board_student != "General Room (PAS101)" else "")
+        st.markdown(f"""
+        <div style="background: #0f172a; color: white; border-radius: 10px; padding: 10px 14px; font-size: 12px;">
+            <div>🚀 <a href="{main_board_url}" target="_blank" style="color: #2dd4bf; font-weight: 700; text-decoration: none;">Open Fullscreen Board in New Tab ↗</a></div>
+            <div style="margin-top: 4px; color: #cbd5e1;">🔗 Student Link: <a href="{student_share_url}" target="_blank" style="color: #38bdf8;">{student_share_url}</a></div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    components.iframe(src=main_board_url, height=840, scrolling=True)
 
 # --- TEACHER TAB ---
 elif tab == "Teacher Tab":
