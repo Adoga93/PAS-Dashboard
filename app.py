@@ -351,7 +351,6 @@ if portal_mode == "teacher" or teacher_param:
                         <div style="margin-top: 8px; text-align: right;">
                             {meet_btn_html}
                             {board_btn_html}
-                            <div style="font-size: 11px; color: #64748b; margin-top: 5px;">Student Board Link: <a href="{c_board_student}" target="_blank" style="color: #0284c7;">{c_board_student}</a></div>
                         </div>
                     </div>
                 </div>
@@ -656,11 +655,10 @@ if portal_mode == "teacher" or teacher_param:
             wb_room_code = st.text_input("Classroom Code", value=default_wb_room, key=f"tp_wb_room_{sel_wb_student}").strip().upper()
         with wb_col3:
             tutor_wb_url = get_pas_board_link(wb_room_code, "tutor", teacher_name, f"PAS Session - {sel_wb_student}")
-            student_wb_url = get_pas_board_link(wb_room_code, "student", sel_wb_student, f"PAS Session - {sel_wb_student}")
             st.markdown(f"""
             <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 14px; font-size: 12px;">
-                <div><strong>🎨 Fullscreen Tutor Board:</strong> <a href="{tutor_wb_url}" target="_blank" style="color: #2563eb; font-weight: 700;">Open in New Tab ↗</a></div>
-                <div style="margin-top: 4px;"><strong>🎓 Student Invite Link:</strong> <a href="{student_wb_url}" target="_blank" style="color: #0d9488; font-weight: 600;">{student_wb_url}</a></div>
+                <div><strong>🎨 Fullscreen Tutor Board:</strong> <a href="{tutor_wb_url}" target="_blank" style="color: #2563eb; font-weight: 700;">Open Board in New Tab ↗</a></div>
+                <div style="margin-top: 4px; color: #64748b;">Click <strong>Share</strong> inside the board to copy the live link for your student.</div>
             </div>
             """, unsafe_allow_html=True)
             
@@ -863,49 +861,26 @@ if tab == "Student Tab":
              else:
                  st.warning("Please enter code and name.")
 
-    st.markdown("---")
-    st.subheader("✏️ Interactive PAS Classroom Whiteboard")
-    with st.expander("🎨 Join Live PAS Whiteboard Session (Students & Tutors)", expanded=True):
-        df_st_wb = utils.get_students_data(client)
-        st_wb_names = sorted([s for s in df_st_wb["Student Name"].dropna().unique() if str(s).strip()]) if not df_st_wb.empty and "Student Name" in df_st_wb.columns else []
-        c_swb1, c_swb2, c_swb3 = st.columns([1.5, 1, 1])
-        with c_swb1:
-            sel_st_wb = st.selectbox("Select Your Name (or Custom Room)", ["Custom Room Code"] + st_wb_names, key="st_portal_wb_sel")
-        with c_swb2:
-            def_st_room = get_student_room_code(sel_st_wb) if sel_st_wb != "Custom Room Code" else "PAS101"
-            st_room_input = st.text_input("Classroom Room Code", value=def_st_room, key=f"st_wb_code_{sel_st_wb}").strip().upper()
-        with c_swb3:
-            st_role_choice = st.radio("Join As", ["student", "tutor"], format_func=lambda r: "🎓 Student" if r == "student" else "👨‍🏫 PAS Tutor", horizontal=True, key="st_wb_role")
-        
-        st_display_name = sel_st_wb if sel_st_wb != "Custom Room Code" else ("Student" if st_role_choice == "student" else "PAS Tutor")
-        live_wb_url = get_pas_board_link(st_room_input, st_role_choice, st_display_name)
-        st.markdown(f"👉 **[Open Fullscreen PAS Whiteboard in New Tab ({st_room_input})]({live_wb_url})** &nbsp;•&nbsp; Shareable Student Link: `{get_pas_board_link(st_room_input, 'student')}`")
-        if st.checkbox("Embed Interactive Whiteboard directly on this page", value=False, key="st_tab_embed_wb"):
-            components.iframe(src=live_wb_url, height=820, scrolling=True)
-
 # --- PAS WHITEBOARD TAB ---
 elif tab == "✏️ PAS Whiteboard":
-    st.header("✏️ PAS Board — Live Interactive Classroom Whiteboard")
-    st.caption("Real-time multiplayer Jamboard with 4-line primary handwriting guides, early learner boxed sheets, math grids, PDF worksheet import, and 150% comfort zoom.")
+    st.header("✏️ PAS Board — Tutor Interactive Classroom Whiteboard")
+    st.caption("Open a live whiteboard session for your class, then click the 'Share' button inside the board to send the live editing link to your student.")
     
     df_st_board = utils.get_students_data(client)
     st_board_names = sorted([s for s in df_st_board["Student Name"].dropna().unique() if str(s).strip()]) if not df_st_board.empty and "Student Name" in df_st_board.columns else []
     
-    b_col1, b_col2, b_col3, b_col4 = st.columns([1.4, 1, 1, 1.6])
+    b_col1, b_col2, b_col3 = st.columns([1.5, 1, 1.5])
     with b_col1:
         sel_board_student = st.selectbox("Select Student Classroom", ["General Room (PAS101)"] + st_board_names, key="main_wb_student")
     with b_col2:
         default_main_room = get_student_room_code(sel_board_student) if sel_board_student != "General Room (PAS101)" else "PAS101"
-        main_room_code = st.text_input("Room Code", value=default_main_room, key=f"main_wb_room_{sel_board_student}").strip().upper()
+        main_room_code = st.text_input("Classroom Code", value=default_main_room, key=f"main_wb_room_{sel_board_student}").strip().upper()
     with b_col3:
-        main_role = st.radio("Role", ["tutor", "student"], format_func=lambda r: "👨‍🏫 Tutor" if r == "tutor" else "🎓 Student", horizontal=True, key="main_wb_role")
-    with b_col4:
-        main_board_url = get_pas_board_link(main_room_code, main_role, sel_board_student if main_role == "student" and sel_board_student != "General Room (PAS101)" else "")
-        student_share_url = get_pas_board_link(main_room_code, "student", sel_board_student if sel_board_student != "General Room (PAS101)" else "")
+        main_board_url = get_pas_board_link(main_room_code, "tutor", "PAS Tutor", f"PAS Session - {sel_board_student}")
         st.markdown(f"""
         <div style="background: #0f172a; color: white; border-radius: 10px; padding: 10px 14px; font-size: 12px;">
-            <div>🚀 <a href="{main_board_url}" target="_blank" style="color: #2dd4bf; font-weight: 700; text-decoration: none;">Open Fullscreen Board in New Tab ↗</a></div>
-            <div style="margin-top: 4px; color: #cbd5e1;">🔗 Student Link: <a href="{student_share_url}" target="_blank" style="color: #38bdf8;">{student_share_url}</a></div>
+            <div>🚀 <a href="{main_board_url}" target="_blank" style="color: #2dd4bf; font-weight: 700; text-decoration: none;">Open Fullscreen Tutor Board in New Tab ↗</a></div>
+            <div style="margin-top: 4px; color: #cbd5e1;">Use the <strong>Share</strong> button inside the board to copy the student link.</div>
         </div>
         """, unsafe_allow_html=True)
         
