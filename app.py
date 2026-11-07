@@ -76,6 +76,10 @@ def render_pas_board_assignments_section(teacher_name=None, student_names=None, 
         st.info("No whiteboard assignments match the current filter. Inside the PAS Board above, upload your worksheet and click **Assign** (or **Share ➔ Send Homework Links**) to generate individual student links.")
         return
 
+    active_mark_key = f"{key_prefix}_active_mark_id"
+    if active_mark_key not in st.session_state:
+        st.session_state[active_mark_key] = None
+
     for a in filtered_asgs:
         a_id = a.get("assignmentId", "")
         a_stu = a.get("studentName", "Student")
@@ -105,24 +109,33 @@ def render_pas_board_assignments_section(teacher_name=None, student_names=None, 
         fb_html = f'<div style="margin-top:6px; font-size:12px; color:#334155; background:#f8fafc; padding:6px 10px; border-radius:6px;">💬 <strong>Teacher Feedback:</strong> {a_fb}</div>' if a_fb else ""
         sub_html = f' &nbsp;•&nbsp; <span>📥 Submitted: {a_sub_at}</span>' if a_sub_at else ""
 
-        st.markdown(f"""
-        <div style="background:white; border-left:5px solid {border_color}; border-radius:10px; padding:14px 18px; margin-bottom:10px; box-shadow:0 1px 6px rgba(0,0,0,0.05); border-top:1px solid #e2e8f0; border-right:1px solid #e2e8f0; border-bottom:1px solid #e2e8f0;">
-            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
-                <div>
-                    <span style="background:{badge_bg}; color:{badge_fg}; padding:3px 10px; border-radius:999px; font-size:11px; font-weight:700;">{badge_label}</span>
-                    <h4 style="margin:6px 0 2px 0; color:#0f172a; font-size:15px; font-weight:700;">👤 {a_stu} — {a_subj}: {a_topic}</h4>
-                    <div style="color:#64748b; font-size:12px;">
-                        <span>👨‍🏫 Tutor: {a_teach}</span> &nbsp;•&nbsp; <span>📅 Assigned: {a_created} (Due: {a_due})</span>{sub_html}
-                    </div>
-                    {fb_html}
-                </div>
-                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                    <a href="{mark_url}" target="_blank" style="background:#0f172a; color:#2dd4bf; text-decoration:none; padding:8px 14px; border-radius:8px; font-weight:700; font-size:12px; border:1px solid #2dd4bf;">🖊️ Open & Mark Board ↗</a>
-                    <a href="{student_url}" target="_blank" style="background:#f1f5f9; color:#334155; text-decoration:none; padding:8px 12px; border-radius:8px; font-weight:600; font-size:12px; border:1px solid #cbd5e1;">🔗 Student Link ↗</a>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        card_html = (
+            f'<div style="background:white; border-left:5px solid {border_color}; border-radius:10px; padding:14px 18px; margin-bottom:8px; box-shadow:0 1px 6px rgba(0,0,0,0.05); border-top:1px solid #e2e8f0; border-right:1px solid #e2e8f0; border-bottom:1px solid #e2e8f0;">'
+            f'<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">'
+            f'<div>'
+            f'<span style="background:{badge_bg}; color:{badge_fg}; padding:3px 10px; border-radius:999px; font-size:11px; font-weight:700;">{badge_label}</span>'
+            f'<h4 style="margin:6px 0 2px 0; color:#0f172a; font-size:15px; font-weight:700;">👤 {a_stu} — {a_subj}: {a_topic}</h4>'
+            f'<div style="color:#64748b; font-size:12px;"><span>👨‍🏫 Tutor: {a_teach}</span> &nbsp;•&nbsp; <span>📅 Assigned: {a_created} (Due: {a_due})</span>{sub_html}</div>'
+            f'{fb_html}'
+            f'</div>'
+            f'<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">'
+            f'<a href="{mark_url}" target="_blank" style="background:#0f172a; color:#2dd4bf; text-decoration:none; padding:8px 14px; border-radius:8px; font-weight:700; font-size:12px; border:1px solid #2dd4bf;">🚀 Open Fullscreen to Mark ↗</a>'
+            f'<a href="{student_url}" target="_blank" style="background:#f1f5f9; color:#334155; text-decoration:none; padding:8px 12px; border-radius:8px; font-weight:600; font-size:12px; border:1px solid #cbd5e1;">🔗 Student Link ↗</a>'
+            f'</div>'
+            f'</div>'
+            f'</div>'
+        )
+        st.markdown(card_html, unsafe_allow_html=True)
+
+        is_open = st.session_state[active_mark_key] == a_id
+        btn_label = f"🔽 Close {a_stu}'s Assignment Board" if is_open else f"🖊️ View & Mark {a_stu}'s Submitted Work Here"
+        if st.button(btn_label, key=f"{key_prefix}_toggle_mark_{a_id}"):
+            st.session_state[active_mark_key] = None if is_open else a_id
+            st.rerun()
+
+        if is_open:
+            st.info(f"🖊️ **Marking {a_stu}'s Assignment ({a_subj}: {a_topic})** — Use the Red Pen on the board below, enter the Score & Feedback in the top bar, and click **💾 Save Marks & Feedback**.")
+            components.iframe(src=mark_url, height=820, scrolling=True)
 
 def get_teacher_portal_link(teacher_name, base_url=None):
     if hasattr(utils, "generate_teacher_portal_link"):
