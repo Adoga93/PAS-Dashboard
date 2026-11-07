@@ -127,16 +127,6 @@ def render_pas_board_assignments_section(teacher_name=None, student_names=None, 
         )
         st.markdown(card_html, unsafe_allow_html=True)
 
-        is_open = st.session_state[active_mark_key] == a_id
-        btn_label = f"🔽 Close {a_stu}'s Assignment Board" if is_open else f"🖊️ View & Mark {a_stu}'s Submitted Work Here"
-        if st.button(btn_label, key=f"{key_prefix}_toggle_mark_{a_id}"):
-            st.session_state[active_mark_key] = None if is_open else a_id
-            st.rerun()
-
-        if is_open:
-            st.info(f"🖊️ **Marking {a_stu}'s Assignment ({a_subj}: {a_topic})** — Use the Red Pen on the board below, enter the Score & Feedback in the top bar, and click **💾 Save Marks & Feedback**.")
-            components.iframe(src=mark_url, height=820, scrolling=True)
-
 def get_teacher_portal_link(teacher_name, base_url=None):
     if hasattr(utils, "generate_teacher_portal_link"):
         return utils.generate_teacher_portal_link(teacher_name, base_url)
@@ -772,10 +762,8 @@ if portal_mode == "teacher" or teacher_param:
 <strong style="color: #0f172a; font-size: 14px;">🎨 {teacher_name}'s Personal Whiteboard</strong>
 <div style="color: #64748b; font-size: 12px; margin-top: 2px;">Click <strong>Share</strong> inside the board to pick your student(s) for a Live Class link, or click <strong>Assign</strong> to pick student(s) for a Homework link.</div>
 </div>
-<a href="{tutor_wb_url}" target="_blank" style="background: #2563eb; color: white; text-decoration: none; padding: 8px 16px; border-radius: 8px; font-weight: 700; font-size: 13px;">🚀 Open Fullscreen Teacher Board ↗</a>
+<a href="{tutor_wb_url}" target="_blank" style="background: #2563eb; color: white; text-decoration: none; padding: 10px 18px; border-radius: 8px; font-weight: 700; font-size: 13px;">🚀 Open Fullscreen Teacher Board ↗</a>
 </div>""", unsafe_allow_html=True)
-            
-        components.iframe(src=tutor_wb_url, height=820, scrolling=True)
         st.markdown("---")
         render_pas_board_assignments_section(teacher_name=teacher_name, student_names=wb_student_opts, key_prefix="tp_asg")
                 
@@ -1005,10 +993,8 @@ elif tab == "✏️ PAS Whiteboard":
 <div style="font-weight: 700; font-size: 13px; color: #2dd4bf;">👨‍🏫 {sel_board_teacher}'s Dedicated Board ({len(t_student_list)} Assigned Students Loaded)</div>
 <div style="margin-top: 3px; color: #cbd5e1;">Click <strong>Share</strong> or <strong>Assign</strong> inside the board to pick students from {sel_board_teacher}'s roster.</div>
 </div>
-<a href="{main_board_url}" target="_blank" style="background: #2dd4bf; color: #0f172a; padding: 8px 14px; border-radius: 8px; font-weight: 700; text-decoration: none;">🚀 Open Teacher Board in New Tab ↗</a>
+<a href="{main_board_url}" target="_blank" style="background: #2dd4bf; color: #0f172a; padding: 10px 18px; border-radius: 8px; font-weight: 700; text-decoration: none;">🚀 Open Fullscreen Teacher Board ↗</a>
 </div>""", unsafe_allow_html=True)
-        
-    components.iframe(src=main_board_url, height=840, scrolling=True)
     st.markdown("---")
     render_pas_board_assignments_section(key_prefix="main_wb_asg")
 
