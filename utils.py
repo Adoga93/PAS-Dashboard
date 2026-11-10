@@ -2814,3 +2814,176 @@ def fetch_board_assignments(teacher_name=None, student_name=None, status=None):
     except Exception:
         return []
 
+
+
+PAS_RECORDER_API_URL = "https://pas-recorder.duckdns.org/api"
+
+def send_sos_admin_email(alert_data):
+    """
+    Sends an immediate SOS email alert to the PAS Admin (SENDER_EMAIL) when a teacher clicks
+    'SOS to PAS Tutor' and admin intervention is needed (or server is unreachable).
+    """
+    try:
+        t_name = alert_data.get("teacherName", "Teacher")
+        s_name = alert_data.get("studentName", "Student")
+        subj = alert_data.get("subject", "Class")
+        sched = alert_data.get("scheduledTime", "Now")
+        m_url = alert_data.get("meetingUrl", "None")
+        diag_code = alert_data.get("diagnosisCode", "UNKNOWN")
+        diag_sum = alert_data.get("diagnosisSummary", "")
+        action_taken = alert_data.get("actionTaken", "")
+        needs_admin = alert_data.get("needsAdminInput", False)
+        admin_reason = alert_data.get("adminReason", "")
+
+        msg = MIMEMultipart()
+        msg["From"] = SENDER_EMAIL
+        msg["To"] = SENDER_EMAIL
+        prefix = "🚨 [ACTION REQUIRED] SOS to PAS Tutor" if needs_admin else "🔔 [AUTO-RECOVERED] SOS to PAS Tutor"
+        msg["Subject"] = f"{prefix}: {t_name} ({s_name} - {subj})"
+
+        badge_color = "#dc2626" if needs_admin else "#d97706"
+        body = f"""
+        <div style="font-family: Arial, sans-serif; padding: 20px; border: 2px solid {badge_color}; border-radius: 12px; max-width: 640px;">
+            <h2 style="color: {badge_color}; margin-top: 0;">{prefix}</h2>
+            <p><strong>Teacher:</strong> {t_name}</p>
+            <p><strong>Student(s):</strong> {s_name}</p>
+            <p><strong>Subject & Time:</strong> {subj} ({sched})</p>
+            <p><strong>Meeting Link:</strong> <a href="{m_url}">{m_url}</a></p>
+            <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 14px 0;">
+            <p><strong>Automated Diagnosis ({diag_code}):</strong><br>{diag_sum}</p>
+            <p><strong>Automated Action Taken:</strong><br>{action_taken}</p>
+            {"<div style='background:#fef2f2;border:1px solid #f87171;padding:12px;border-radius:8px;color:#991b1b;'><strong>⚠️ Why Your Input Is Needed:</strong><br>" + admin_reason + "</div>" if needs_admin else "<div style='background:#ecfdf5;border:1px solid #34d399;padding:12px;border-radius:8px;color:#065f46;'><strong>✅ Auto-Recovery Dispatched:</strong> No manual action required unless the bot still cannot enter the call.</div>"}
+        </div>
+        """
+        msg.attach(MIMEText(body, "html"))
+
+        server = smtplib.SMTP("smtp.gmail.com", 587, timeout=10)
+        server.starttls()
+        server.login(SENDER_EMAIL, SENDER_PASSWORD)
+        server.sendmail(SENDER_EMAIL, SENDER_EMAIL, msg.as_string())
+        server.quit()
+        return True
+    except Exception as e:
+        print(f"SOS Email warning: {e}")
+        return False
+
+
+def trigger_sos_to_pas_tutor(client, teacher_name, student_name="", subject="", scheduled_time="", meeting_url="", note=""):
+    """
+    Triggers the automated SOS diagnostic and bot self-healing workflow on the OCI Recorder Server.
+    If the server is unreachable or flags needsAdminInput=True, logs to Google Sheet and emails the Admin.
+    Returns (success_bool, alert_dict).
+    """
+    import urllib.request
+    payload = {
+        "teacherName": str(teacher_name or "").strip(),
+        "studentName": str(student_name or "").strip(),
+        "subject": str(subject or "").strip(),
+        "scheduledTime": str(scheduled_time or "").strip(),
+        "meetingUrl": str(meeting_url or "").strip(),
+        "note": str(note or "").strip()
+    }
+    url = f"{PAS_RECORDER_API_URL}/sos"
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            res_data = json.loads(resp.read().decode("utf-8"))
+            alert = res_data.get("alert", {})
+            if alert.get("needsAdminInput"):
+                send_sos_admin_email(alert)
+            return True, alert
+    except Exception as e:
+        fallback_alert = {
+            "alertId": f"SOS_FALLBACK_{int(time.time())}",
+            "createdAt": datetime.datetime.now().isoformat(),
+            "teacherName": payload["teacherName"],
+            "studentName": payload["studentName"],
+            "subject": payload["subject"],
+            "scheduledTime": payload["scheduledTime"],
+            "meetingUrl": payload["meetingUrl"],
+            "diagnosisCode": "RECORDER_SERVER_UNREACHABLE",
+            "diagnosisSummary": f"Could not reach the PAS Recorder Server at pas-recorder.duckdns.org ({e}).",
+            "actionTaken": "Logged emergency SOS alert to Google Sheets and sent email alert to PAS Admin.",
+            "teacherMessage": "🚨 SOS Alert Sent to PAS Admin! The recorder server is currently being checked by the administrator.",
+            "needsAdminInput": True,
+            "adminReason": f"Recorder server (51.170.135.52 / pas-recorder.duckdns.org) did not respond to SOS request from {teacher_name}: {e}",
+            "status": "needs_admin"
+        }
+        try:
+            sheet = get_sheet_by_id(client)
+            if sheet:
+                ws_names = [w.title for w in sheet.worksheets()]
+                if "SOS_Alerts" not in ws_names:
+                    ws = sheet.add_worksheet(title="SOS_Alerts", rows="500", cols="15")
+                    ws.append_row([
+                        "Alert ID", "Timestamp (WAT)", "Teacher Name", "Student Name", "Subject",
+                        "Scheduled Time", "Meeting Link", "Diagnosis Code", "Diagnosis Summary",
+                        "Action Taken", "Needs Admin Input", "Admin Reason", "Status"
+                    ])
+                else:
+                    ws = sheet.worksheet("SOS_Alerts")
+                ws.append_row([
+                    fallback_alert["alertId"],
+                    datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    fallback_alert["teacherName"],
+                    fallback_alert["studentName"],
+                    fallback_alert["subject"],
+                    fallback_alert["scheduledTime"],
+                    fallback_alert["meetingUrl"],
+                    fallback_alert["diagnosisCode"],
+                    fallback_alert["diagnosisSummary"],
+                    fallback_alert["actionTaken"],
+                    "YES",
+                    fallback_alert["adminReason"],
+                    "needs_admin"
+                ])
+        except Exception:
+            pass
+        send_sos_admin_email(fallback_alert)
+        return False, fallback_alert
+
+
+def fetch_active_sos_alerts(teacher_name=None, unresolved_only=True):
+    """
+    Fetches recent SOS alerts from the OCI Recorder Server.
+    """
+    import urllib.request
+    import urllib.parse
+    params = {}
+    if teacher_name:
+        params["teacher"] = str(teacher_name).strip()
+    if unresolved_only:
+        params["unresolved"] = "true"
+    qs = f"?{urllib.parse.urlencode(params)}" if params else ""
+    url = f"{PAS_RECORDER_API_URL}/sos{qs}"
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data.get("alerts", [])
+    except Exception:
+        return []
+
+
+def resolve_sos_alert(alert_id):
+    """
+    Marks an SOS alert as resolved/acknowledged on the OCI Recorder Server.
+    """
+    import urllib.request
+    url = f"{PAS_RECORDER_API_URL}/sos"
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps({"action": "resolve", "alertId": alert_id}).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            return True
+    except Exception:
+        return False

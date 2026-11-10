@@ -404,6 +404,82 @@ if portal_mode == "teacher" or teacher_param:
                 pass
             st.rerun()
 
+    # --- 🚨 SOS TO PAS TUTOR (PANIC BUTTON BAR) ---
+    st.markdown("""
+    <div style="background: linear-gradient(90deg, #fef2f2 0%, #fff7ed 100%); border: 2px solid #ef4444; border-radius: 14px; padding: 14px 20px; margin: 12px 0 14px 0; box-shadow: 0 4px 12px rgba(239, 68, 68, 0.12);">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+            <div>
+                <span style="background: #dc2626; color: white; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 800; letter-spacing: 0.5px;">🚨 PANIC BUTTON</span>
+                <strong style="color: #991b1b; font-size: 16px; margin-left: 8px;">SOS to PAS Tutor — Is the Recorder Bot Missing from Your Class?</strong>
+                <div style="color: #7f1d1d; font-size: 13px; margin-top: 4px;">Select your active student/class below and click <strong>🚨 SOS to PAS Tutor</strong>. Our automation will immediately diagnose why the bot isn't in your class, re-launch it into your meeting room within 25 seconds, and alert the PAS Admin if manual help is needed.</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    sos_options = []
+    sos_lookup = {}
+    if not df_teacher_today.empty:
+        for _, r_sos in df_teacher_today.iterrows():
+            s_lbl = f"Today @ {r_sos.get('Time', '')} — {r_sos.get('Student', 'Student')} ({r_sos.get('Subject', 'Class')})"
+            sos_options.append(s_lbl)
+            sos_lookup[s_lbl] = {
+                "studentName": str(r_sos.get("Student", "")).strip(),
+                "subject": str(r_sos.get("Subject", "Class")).strip(),
+                "scheduledTime": str(r_sos.get("Time", "Now")).strip(),
+                "meetingUrl": str(r_sos.get("MeetingLink", "")).strip()
+            }
+    if assigned_students:
+        for s_obj in assigned_students:
+            s_nm = s_obj.get("Student Name", "")
+            c_pl = s_obj.get("Current Week Plan") or {}
+            s_lnk = c_pl.get("Meeting Link") or ""
+            s_sbj = c_pl.get("Subject") or s_obj.get("Subjects") or "Class"
+            s_lbl = f"Assigned Student — {s_nm} ({s_sbj})"
+            if s_lbl not in sos_lookup:
+                sos_options.append(s_lbl)
+                sos_lookup[s_lbl] = {
+                    "studentName": s_nm,
+                    "subject": s_sbj,
+                    "scheduledTime": "Active Class",
+                    "meetingUrl": s_lnk
+                }
+    if not sos_options:
+        sos_options = ["General Class Session"]
+        sos_lookup["General Class Session"] = {
+            "studentName": "Assigned Student",
+            "subject": t_expertise or "Class",
+            "scheduledTime": "Now",
+            "meetingUrl": ""
+        }
+
+    sos_col1, sos_col2 = st.columns([2.2, 1.2])
+    with sos_col1:
+        selected_sos_label = st.selectbox("Select Class / Student for SOS Check:", sos_options, key="top_sos_class_select", label_visibility="collapsed")
+    with sos_col2:
+        if st.button("🚨 SOS to PAS Tutor (Bot Not in Class)", key="top_sos_panic_btn", type="primary", use_container_width=True):
+            target_sos = sos_lookup.get(selected_sos_label, {})
+            with st.spinner("🔍 SOS Automation Running: Checking bot status, inspecting meeting link, and dispatching recorder bot..."):
+                ok_sos, alert_res = utils.trigger_sos_to_pas_tutor(
+                    client,
+                    teacher_name=teacher_name,
+                    student_name=target_sos.get("studentName", ""),
+                    subject=target_sos.get("subject", ""),
+                    scheduled_time=target_sos.get("scheduledTime", ""),
+                    meeting_url=target_sos.get("meetingUrl", "")
+                )
+                st.session_state["last_sos_alert_result"] = alert_res
+
+    if st.session_state.get("last_sos_alert_result"):
+        res_a = st.session_state["last_sos_alert_result"]
+        t_msg = res_a.get("teacherMessage") or "SOS processed."
+        diag_s = res_a.get("diagnosisSummary") or ""
+        act_s = res_a.get("actionTaken") or ""
+        if res_a.get("needsAdminInput"):
+            st.warning(f"**{t_msg}**\n\n- **Automated Diagnosis:** {diag_s}\n- **Action Taken:** {act_s}")
+        else:
+            st.success(f"**{t_msg}**\n\n- **Automated Diagnosis:** {diag_s}\n- **Action Taken:** {act_s}")
+
     st.markdown("---")
 
     # Primary Workspace Tabs
@@ -421,7 +497,7 @@ if portal_mode == "teacher" or teacher_param:
         if df_teacher_today.empty:
             st.info(f"🌴 **No classes scheduled for today ({today_display}).** Enjoy your day, or use the **Weekly Planning** tab to confirm upcoming sessions!")
         else:
-            for _, c_row in df_teacher_today.iterrows():
+            for c_idx, (_, c_row) in enumerate(df_teacher_today.iterrows()):
                 c_subj = c_row.get("Subject", "Class")
                 c_st = c_row.get("Student", "Student")
                 c_time = c_row.get("Time", "")
@@ -441,7 +517,7 @@ if portal_mode == "teacher" or teacher_param:
                 board_btn_html = f'<a href="{c_board_tutor}" target="_blank" style="display: inline-block; background: #0f172a; color: #2dd4bf; border: 1px solid #14b8a6; text-decoration: none; padding: 8px 15px; border-radius: 8px; font-weight: 600; font-size: 13px; margin-top: 6px;">✏️ Open PAS Whiteboard ({c_room})</a>'
                     
                 st.markdown(f"""
-                <div style="background: white; border-left: 5px solid #2563eb; border-radius: 10px; padding: 18px 22px; margin-bottom: 16px; box-shadow: 0 2px 10px rgba(0,0,0,0.06); border-top: 1px solid #f1f5f9; border-right: 1px solid #f1f5f9; border-bottom: 1px solid #f1f5f9;">
+                <div style="background: white; border-left: 5px solid #2563eb; border-radius: 10px; padding: 18px 22px; margin-bottom: 6px; box-shadow: 0 2px 10px rgba(0,0,0,0.06); border-top: 1px solid #f1f5f9; border-right: 1px solid #f1f5f9; border-bottom: 1px solid #f1f5f9;">
                     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
                         <div>
                             <span style="background: #2563eb; color: white; padding: 3px 12px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase;">⏳ Scheduled Today</span>
@@ -455,6 +531,18 @@ if portal_mode == "teacher" or teacher_param:
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
+                if st.button(f"🚨 SOS to PAS Tutor — Bot Not in Class ({c_st})", key=f"card_sos_btn_{c_idx}", type="secondary"):
+                    with st.spinner(f"🔍 Checking why bot isn't in {c_st}'s class and dispatching recorder..."):
+                        ok_sos, alert_res = utils.trigger_sos_to_pas_tutor(
+                            client,
+                            teacher_name=teacher_name,
+                            student_name=c_st,
+                            subject=c_subj,
+                            scheduled_time=c_time,
+                            meeting_url=c_link
+                        )
+                        st.session_state["last_sos_alert_result"] = alert_res
+                        st.rerun()
     
     with portal_tab1:
         if not assigned_students:
@@ -785,6 +873,39 @@ if st.sidebar.button("🔄 Sync with Database (Refresh)"):
 
 st.sidebar.markdown("---")
 tab = st.sidebar.radio("Navigate to", ["Student Tab", "Teacher Tab", "✏️ PAS Whiteboard", "Registration", "Class & Monthly Reports", "Admin Dashboard"])
+
+# --- LIVE SOS ALERTS BANNER FOR ADMIN ---
+active_admin_sos = utils.fetch_active_sos_alerts(unresolved_only=True)
+if active_admin_sos:
+    for sos_item in active_admin_sos[:5]:
+        s_aid = sos_item.get("alertId", "")
+        s_t = sos_item.get("teacherName", "Teacher")
+        s_st = sos_item.get("studentName", "Student")
+        s_sub = sos_item.get("subject", "Class")
+        s_tm = sos_item.get("scheduledTime", "Now")
+        s_diag = sos_item.get("diagnosisSummary", "")
+        s_act = sos_item.get("actionTaken", "")
+        s_ver = sos_item.get("verificationDetail", "")
+        s_need = sos_item.get("needsAdminInput", False)
+        s_reason = sos_item.get("adminReason", "")
+        hdr_tag = "🚨 SOS TO PAS TUTOR — ADMIN INPUT NEEDED" if s_need else "🔔 SOS TO PAS TUTOR — AUTO-RECOVERY ACTIVE"
+        bg_col = "#fef2f2" if s_need else "#fffbeb"
+        bd_col = "#ef4444" if s_need else "#f59e0b"
+        ver_html = f'<div style="font-size:13px; color:#0369a1; margin-top:2px;"><strong>Live Verification:</strong> {s_ver}</div>' if s_ver else ""
+        rsn_html = f'<div style="font-size:13px; color:#b91c1c; font-weight:700; margin-top:4px;">⚠️ Action Required: {s_reason}</div>' if (s_need and s_reason) else ""
+        st.markdown(f"""
+        <div style="background:{bg_col}; border-left:6px solid {bd_col}; padding:14px 18px; border-radius:10px; margin-bottom:8px; border:1px solid {bd_col};">
+            <strong style="color:#991b1b; font-size:15px;">{hdr_tag}: {s_t} • {s_st} ({s_sub} @ {s_tm})</strong>
+            <div style="font-size:13px; color:#1e293b; margin-top:4px;"><strong>Diagnosis:</strong> {s_diag}</div>
+            <div style="font-size:13px; color:#065f46; margin-top:2px;"><strong>Automated Action:</strong> {s_act}</div>
+            {ver_html}
+            {rsn_html}
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button(f"✓ Dismiss SOS Alert ({s_t} - {s_st})", key=f"dismiss_sos_{s_aid}"):
+            utils.resolve_sos_alert(s_aid)
+            st.rerun()
+
 
 # --- STUDENT TAB ---
 if tab == "Student Tab":
