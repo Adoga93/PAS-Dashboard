@@ -126,6 +126,19 @@ def render_pas_board_assignments_section(teacher_name=None, student_names=None, 
             f'</div>'
         )
         st.markdown(card_html, unsafe_allow_html=True)
+        if a_status in ("Submitted", "Marked"):
+            if st.button(
+                f"🔓 Unlock Assignment for {a_stu} to Edit & Submit Again",
+                key=f"{key_prefix}_reopen_{a_id}",
+                help="Makes this assignment editable again on the student's existing link in case they clicked Submit before finishing."
+            ):
+                ok, _ = utils.reopen_board_assignment(a_id)
+                if ok:
+                    st.success(f"✅ Unlocked! {a_stu} can now edit and submit the assignment again using their existing link.")
+                    time.sleep(0.6)
+                    st.rerun()
+                else:
+                    st.error("Could not unlock assignment. Please try again.")
 
 def get_teacher_portal_link(teacher_name, base_url=None):
     if hasattr(utils, "generate_teacher_portal_link"):

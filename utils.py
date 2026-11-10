@@ -2992,3 +2992,26 @@ def resolve_sos_alert(alert_id):
             return True
     except Exception:
         return False
+
+
+def reopen_board_assignment(assignment_id):
+    """
+    Unlocks a submitted or marked assignment on the PAS Board server so the student
+    can edit and submit it again using their existing assignment link.
+    """
+    import urllib.request
+    import urllib.parse
+    url = f"{PAS_BOARD_API_URL}/assignments/{urllib.parse.quote(str(assignment_id).strip())}/reopen"
+    try:
+        req = urllib.request.Request(
+            url,
+            data=b"{}",
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return bool(data.get("ok")), data.get("assignment")
+    except Exception as e:
+        return False, str(e)
+
