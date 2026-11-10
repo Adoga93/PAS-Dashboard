@@ -2893,6 +2893,11 @@ def trigger_sos_to_pas_tutor(client, teacher_name, student_name="", subject="", 
         )
         with urllib.request.urlopen(req, timeout=25) as resp:
             res_data = json.loads(resp.read().decode("utf-8"))
+            if res_data.get("noClassNow"):
+                return True, {
+                    "noClassNow": True,
+                    "teacherMessage": res_data.get("teacherMessage", "You have no class holding for now.")
+                }
             alert = res_data.get("alert", {})
             if alert.get("needsAdminInput"):
                 send_sos_admin_email(alert)
