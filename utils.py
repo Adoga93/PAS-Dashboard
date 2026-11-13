@@ -1017,7 +1017,8 @@ def get_teacher_master_schedule(_client, teacher_name, selected_day=None):
                     "TimeObj": cls["TimeObj"],
                     "Student": s_name,
                     "Subject": cls["Subject"],
-                    "MeetingLink": links_map.get(s_clean, "")
+                    "MeetingLink": links_map.get(s_clean, ""),
+                    "RawEntry": cls.get("Raw", "")
                 })
 
     if not classes:
@@ -1477,6 +1478,7 @@ def update_student(client, original_name, updated_data):
                 # Clear relevant caches
                 get_students_data.clear()
                 get_billing_data.clear()
+                get_teacher_master_schedule.clear()
                 
                 # Sync teacher assignments (add/remove this student from their Assigned Students lists)
                 if "Selected Teachers" in updated_data:
@@ -1590,6 +1592,90 @@ def sync_teacher_schedule_from_student(client, student_name):
     except Exception as e:
         print(f"Error syncing teacher schedule: {e}")
         return False
+
+def reschedule_student_class(client, student_name, original_raw_entry, new_day, new_start_time, new_end_time):
+    """
+    Updates the day and time of a single class slot in the student's 'Class Times'
+    column in the 'Students' sheet, preserving all other class slots and teacher tags.
+    """
+    if new_end_time <= new_start_time:
+        return False, "End time must be after start time."
+
+    sheet = get_sheet_by_id(client)
+    if not sheet:
+        return False, "Unable to connect to Google Sheet."
+
+    try:
+        ws = sheet.worksheet("Students")
+        all_rows = ws.get_all_values()
+        if not all_rows:
+            return False, "Students sheet is empty."
+
+        headers = all_rows[0]
+        try:
+            name_col_idx = headers.index("Student Name")
+        except ValueError:
+            name_col_idx = 0
+
+        try:
+            times_col_idx = headers.index("Class Times")
+        except ValueError:
+            times_col_idx = 3
+
+        target_norm = normalize_name(student_name)
+        target_row_num = None
+        matched_student_name = student_name
+        curr_times_str = ""
+
+        for idx, row in enumerate(all_rows[1:], start=2):
+            row_name = row[name_col_idx] if len(row) > name_col_idx else ""
+            if normalize_name(row_name) == target_norm:
+                target_row_num = idx
+                matched_student_name = row_name.strip()
+                curr_times_str = row[times_col_idx] if len(row) > times_col_idx else ""
+                break
+
+        if not target_row_num:
+            return False, f"Student '{student_name}' not found in Students sheet."
+
+        parts = [p.strip() for p in curr_times_str.split(",") if p.strip()]
+        target_raw_norm = " ".join(str(original_raw_entry).strip().lower().split())
+
+        updated = False
+        new_parts = []
+        rescheduled_subj = "Class"
+        s_str = new_start_time.strftime("%I:%M %p")
+        e_str = new_end_time.strftime("%I:%M %p")
+
+        for part in parts:
+            part_norm = " ".join(part.lower().split())
+            if not updated and part_norm == target_raw_norm:
+                parsed = parse_student_schedule(part)
+                if parsed and parsed[0].get("Valid"):
+                    cls_info = parsed[0]
+                    rescheduled_subj = cls_info.get("Subject", "Class")
+                    assigned_t = cls_info.get("AssignedTeacher")
+                    teacher_str = f" [{assigned_t}]" if assigned_t else ""
+                    new_parts.append(f"{rescheduled_subj} ({new_day[:3]} {s_str} - {e_str}){teacher_str}")
+                    updated = True
+                else:
+                    new_parts.append(part)
+            else:
+                new_parts.append(part)
+
+        if not updated:
+            return False, "Could not locate the selected class slot in the student's schedule. Please refresh and try again."
+
+        updated_times_str = ", ".join(new_parts)
+        ws.update_cell(target_row_num, times_col_idx + 1, updated_times_str)
+
+        get_students_data.clear()
+        get_teacher_master_schedule.clear()
+        sync_teacher_schedule_from_student(client, matched_student_name)
+
+        return True, f"Rescheduled {rescheduled_subj} with {matched_student_name} to {new_day} ({s_str} - {e_str})."
+    except Exception as e:
+        return False, f"Error rescheduling class: {e}"
 
 def update_teacher(client, original_name, updated_data):
     """

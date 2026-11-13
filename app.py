@@ -443,6 +443,52 @@ if portal_mode == "teacher" or teacher_param:
         "✏️ Interactive PAS Whiteboard"
     ])
     
+    def render_reschedule_expander(c_row, key_prefix, fallback_day=None):
+        """Renders an inline reschedule form for a single class card."""
+        c_subj = c_row.get("Subject", "Class")
+        c_st = c_row.get("Student", "Student")
+        c_day = c_row.get("Day") or fallback_day or "Monday"
+        c_time_str = str(c_row.get("Time", "")).strip()
+        c_end_str = str(c_row.get("EndTime", "")).strip()
+        c_raw = str(c_row.get("RawEntry", "")).strip()
+
+        if not c_raw:
+            return
+
+        day_options = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        day_idx = day_options.index(c_day) if c_day in day_options else 0
+
+        def_start = datetime.time(9, 0)
+        try:
+            def_start = datetime.datetime.strptime(c_time_str, "%I:%M %p").time()
+        except Exception:
+            pass
+
+        def_end = (datetime.datetime.combine(datetime.date.today(), def_start) + datetime.timedelta(hours=1)).time()
+        if c_end_str and c_end_str != "-":
+            try:
+                def_end = datetime.datetime.strptime(c_end_str, "%I:%M %p").time()
+            except Exception:
+                pass
+
+        with st.expander(f"🗓️ Reschedule {c_subj} with {c_st}", expanded=False):
+            with st.form(key=f"resched_form_{key_prefix}"):
+                col_d, col_s, col_e = st.columns(3)
+                new_day = col_d.selectbox("New Day", day_options, index=day_idx, key=f"rs_day_{key_prefix}")
+                new_start = col_s.time_input("New Start Time", value=def_start, key=f"rs_start_{key_prefix}")
+                new_end = col_e.time_input("New End Time", value=def_end, key=f"rs_end_{key_prefix}")
+                if st.form_submit_button("💾 Save New Day & Time", use_container_width=True, type="primary"):
+                    if new_end <= new_start:
+                        st.error("End time must be after start time.")
+                    else:
+                        ok, msg = utils.reschedule_student_class(client, c_st, c_raw, new_day, new_start, new_end)
+                        if ok:
+                            st.success(f"✅ {msg}")
+                            time.sleep(0.6)
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {msg}")
+
     # TAB 0: TODAY'S CLASSES (DEFAULT VIEW)
     with portal_tab0:
         st.subheader(f"📅 Today's Class Schedule ({today_display})")
@@ -450,7 +496,7 @@ if portal_mode == "teacher" or teacher_param:
         if df_teacher_today.empty:
             st.info(f"🌴 **No classes scheduled for today ({today_display}).** Enjoy your day, or use the **Weekly Planning** tab to confirm upcoming sessions!")
         else:
-            for _, c_row in df_teacher_today.iterrows():
+            for t_idx, (_, c_row) in enumerate(df_teacher_today.iterrows()):
                 c_subj = c_row.get("Subject", "Class")
                 c_st = c_row.get("Student", "Student")
                 c_time = c_row.get("Time", "")
@@ -470,7 +516,7 @@ if portal_mode == "teacher" or teacher_param:
                 board_btn_html = f'<a href="{c_board_tutor}" target="_blank" style="display: inline-block; background: #0f172a; color: #2dd4bf; border: 1px solid #14b8a6; text-decoration: none; padding: 8px 15px; border-radius: 8px; font-weight: 600; font-size: 13px; margin-top: 6px;">✏️ Open PAS Whiteboard ({c_room})</a>'
                     
                 st.markdown(f"""
-                <div style="background: white; border-left: 5px solid #2563eb; border-radius: 10px; padding: 18px 22px; margin-bottom: 16px; box-shadow: 0 2px 10px rgba(0,0,0,0.06); border-top: 1px solid #f1f5f9; border-right: 1px solid #f1f5f9; border-bottom: 1px solid #f1f5f9;">
+                <div style="background: white; border-left: 5px solid #2563eb; border-radius: 10px; padding: 18px 22px; margin-bottom: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.06); border-top: 1px solid #f1f5f9; border-right: 1px solid #f1f5f9; border-bottom: 1px solid #f1f5f9;">
                     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
                         <div>
                             <span style="background: #2563eb; color: white; padding: 3px 12px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase;">⏳ Scheduled Today</span>
@@ -484,6 +530,7 @@ if portal_mode == "teacher" or teacher_param:
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
+                render_reschedule_expander(c_row, f"today_{t_idx}", fallback_day=today_day_name)
     
     with portal_tab1:
         if not assigned_students:
@@ -646,7 +693,7 @@ if portal_mode == "teacher" or teacher_param:
         if filtered_sched.empty:
             st.info(f"No classes scheduled for {day_filter}.")
         else:
-            for _, c_row in filtered_sched.iterrows():
+            for w_idx, (_, c_row) in enumerate(filtered_sched.iterrows()):
                 c_day = c_row.get("Day", "")
                 c_subj = c_row.get("Subject", "Class")
                 c_st = c_row.get("Student", "Student")
@@ -662,7 +709,7 @@ if portal_mode == "teacher" or teacher_param:
                     meet_btn_html = '<span style="color: #94a3b8; font-size: 12px;">No link attached</span>'
                     
                 st.markdown(f"""
-                <div style="background: white; border-left: 4px solid #3b82f6; border-radius: 8px; padding: 14px 18px; margin-bottom: 12px; box-shadow: 0 1px 6px rgba(0,0,0,0.04); border-top: 1px solid #f1f5f9; border-right: 1px solid #f1f5f9; border-bottom: 1px solid #f1f5f9;">
+                <div style="background: white; border-left: 4px solid #3b82f6; border-radius: 8px; padding: 14px 18px; margin-bottom: 8px; box-shadow: 0 1px 6px rgba(0,0,0,0.04); border-top: 1px solid #f1f5f9; border-right: 1px solid #f1f5f9; border-bottom: 1px solid #f1f5f9;">
                     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
                         <div>
                             <span style="background: #f1f5f9; color: #334155; padding: 2px 10px; border-radius: 8px; font-size: 11px; font-weight: 700;">{c_day}</span>
@@ -675,6 +722,7 @@ if portal_mode == "teacher" or teacher_param:
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
+                render_reschedule_expander(c_row, f"weekly_{w_idx}")
 
         # --- SECTION: STUDENT MONTHLY EVALUATIONS & CONFIRMATION ---
         st.markdown("---")
