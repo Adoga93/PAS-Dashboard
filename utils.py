@@ -3101,3 +3101,32 @@ def reopen_board_assignment(assignment_id):
     except Exception as e:
         return False, str(e)
 
+
+def ai_mark_board_assignment(assignment_id):
+    """
+    Triggers AI marking (Gemini Vision) on the PAS Board server for a submitted assignment.
+    Returns (True, response_dict) or (False, error_message).
+    """
+    import urllib.request
+    import urllib.parse
+    import urllib.error
+    url = f"{PAS_BOARD_API_URL}/assignments/{urllib.parse.quote(str(assignment_id).strip())}/ai-mark"
+    try:
+        req = urllib.request.Request(
+            url,
+            data=b"{}",
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=50) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return bool(data.get("ok")), data
+    except urllib.error.HTTPError as he:
+        try:
+            err_body = json.loads(he.read().decode("utf-8"))
+            return False, err_body.get("error", f"HTTP {he.code}")
+        except Exception:
+            return False, f"HTTP {he.code}"
+    except Exception as e:
+        return False, str(e)
+

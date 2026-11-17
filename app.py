@@ -22,6 +22,43 @@ def get_student_room_code(student_name, teacher_name=""):
     short_hash = hashlib.md5(seed.encode("utf-8")).hexdigest()[:3].upper()
     return f"P{clean_s}{short_hash}"
 
+def build_schedule_board_slots(df_sched, teacher_name):
+    """
+    Groups schedule rows that share the EXACT same (Day, Time, Teacher, MeetingLink).
+    - Students sharing the same time, teacher, and link get the SAME board code & shared student roster.
+    - Single-student slots keep their existing individual student board code.
+    """
+    slot_map = {}
+    t_norm = utils.normalize_name(teacher_name)
+    if df_sched is None or df_sched.empty:
+        return {}
+    for _, row in df_sched.iterrows():
+        day_k = str(row.get("Day", "")).strip().lower()
+        time_k = str(row.get("Time", "")).strip().lower()
+        link_k = str(row.get("MeetingLink", "")).strip().lower()
+        stu_name = str(row.get("Student", "")).strip()
+        subj_name = str(row.get("Subject", "")).strip()
+        key = (day_k, time_k, t_norm, link_k)
+        if key not in slot_map:
+            slot_map[key] = {"students": [], "subjects": []}
+        if stu_name and stu_name not in slot_map[key]["students"]:
+            slot_map[key]["students"].append(stu_name)
+        if subj_name and subj_name not in slot_map[key]["subjects"]:
+            slot_map[key]["subjects"].append(subj_name)
+
+    for key, info in slot_map.items():
+        students_in_slot = info["students"]
+        if len(students_in_slot) > 1:
+            seed = f"{key[2]}|{key[0]}|{key[1]}|{key[3]}"
+            short_hash = hashlib.md5(seed.encode("utf-8")).hexdigest()[:4].upper()
+            info["room_code"] = f"PCLS{short_hash}"
+            info["is_shared"] = True
+        else:
+            only_stu = students_in_slot[0] if students_in_slot else "Class"
+            info["room_code"] = get_student_room_code(only_stu, teacher_name)
+            info["is_shared"] = False
+    return slot_map
+
 def get_pas_board_link(room_code="PAS101", role="tutor", user_name="", title="", students="", subject=""):
     clean_room = "".join(ch for ch in str(room_code).upper() if ch.isalnum())[:10] or "PAS101"
     params = {"room": clean_room, "role": role}
@@ -106,6 +143,7 @@ def render_pas_board_assignments_section(teacher_name=None, student_names=None, 
         mark_url = f"{PAS_BOARD_BASE_URL}/?assignment={urllib.parse.quote(a_id)}&role=tutor&name={urllib.parse.quote(a_teach)}"
         student_url = f"{PAS_BOARD_BASE_URL}/?assignment={urllib.parse.quote(a_id)}&role=student"
 
+        ai_marked_badge = ' <span style="background:#ede9fe; color:#5b21b6; padding:2px 8px; border-radius:999px; font-size:10px; font-weight:700; margin-left:6px;">🤖 AI Marked</span>' if a.get("aiMarked") else ""
         fb_html = f'<div style="margin-top:6px; font-size:12px; color:#334155; background:#f8fafc; padding:6px 10px; border-radius:6px;">💬 <strong>Teacher Feedback:</strong> {a_fb}</div>' if a_fb else ""
         sub_html = f' &nbsp;•&nbsp; <span>📥 Submitted: {a_sub_at}</span>' if a_sub_at else ""
 
@@ -113,7 +151,7 @@ def render_pas_board_assignments_section(teacher_name=None, student_names=None, 
             f'<div style="background:white; border-left:5px solid {border_color}; border-radius:10px; padding:14px 18px; margin-bottom:8px; box-shadow:0 1px 6px rgba(0,0,0,0.05); border-top:1px solid #e2e8f0; border-right:1px solid #e2e8f0; border-bottom:1px solid #e2e8f0;">'
             f'<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">'
             f'<div>'
-            f'<span style="background:{badge_bg}; color:{badge_fg}; padding:3px 10px; border-radius:999px; font-size:11px; font-weight:700;">{badge_label}</span>'
+            f'<span style="background:{badge_bg}; color:{badge_fg}; padding:3px 10px; border-radius:999px; font-size:11px; font-weight:700;">{badge_label}</span>{ai_marked_badge}'
             f'<h4 style="margin:6px 0 2px 0; color:#0f172a; font-size:15px; font-weight:700;">👤 {a_stu} — {a_subj}: {a_topic}</h4>'
             f'<div style="color:#64748b; font-size:12px;"><span>👨‍🏫 Tutor: {a_teach}</span> &nbsp;•&nbsp; <span>📅 Assigned: {a_created} (Due: {a_due})</span>{sub_html}</div>'
             f'{fb_html}'
@@ -127,18 +165,36 @@ def render_pas_board_assignments_section(teacher_name=None, student_names=None, 
         )
         st.markdown(card_html, unsafe_allow_html=True)
         if a_status in ("Submitted", "Marked"):
-            if st.button(
-                f"🔓 Unlock Assignment for {a_stu} to Edit & Submit Again",
-                key=f"{key_prefix}_reopen_{a_id}",
-                help="Makes this assignment editable again on the student's existing link in case they clicked Submit before finishing."
-            ):
-                ok, _ = utils.reopen_board_assignment(a_id)
-                if ok:
-                    st.success(f"✅ Unlocked! {a_stu} can now edit and submit the assignment again using their existing link.")
-                    time.sleep(0.6)
-                    st.rerun()
-                else:
-                    st.error("Could not unlock assignment. Please try again.")
+            act_col1, act_col2 = st.columns([1.2, 1.4])
+            with act_col1:
+                ai_btn_label = "🤖 Re-Mark with AI" if a_status == "Marked" else f"🤖 Ask AI to Mark {a_stu.split()[0]}'s Work"
+                if st.button(
+                    ai_btn_label,
+                    key=f"{key_prefix}_aimark_{a_id}",
+                    help="Let AI review the student's uploaded worksheet, handwriting, or notebook photo and draft a score & feedback."
+                ):
+                    with st.spinner(f"🤖 AI is marking {a_stu}'s assignment..."):
+                        ok_ai, res_ai = utils.ai_mark_board_assignment(a_id)
+                        if ok_ai and isinstance(res_ai, dict):
+                            marked_asg = res_ai.get("assignment") or {}
+                            st.success(f"🤖 AI Marked! Score: {marked_asg.get('score', 'Reviewed')} — Open the board anytime if you want to adjust marks or comments.")
+                            time.sleep(0.8)
+                            st.rerun()
+                        else:
+                            st.error(f"AI marking failed: {res_ai}")
+            with act_col2:
+                if st.button(
+                    f"🔓 Unlock Assignment for {a_stu} to Edit & Submit Again",
+                    key=f"{key_prefix}_reopen_{a_id}",
+                    help="Makes this assignment editable again on the student's existing link in case they clicked Submit before finishing."
+                ):
+                    ok, _ = utils.reopen_board_assignment(a_id)
+                    if ok:
+                        st.success(f"✅ Unlocked! {a_stu} can now edit and submit the assignment again using their existing link.")
+                        time.sleep(0.6)
+                        st.rerun()
+                    else:
+                        st.error("Could not unlock assignment. Please try again.")
 
 def get_teacher_portal_link(teacher_name, base_url=None):
     if hasattr(utils, "generate_teacher_portal_link"):
@@ -489,6 +545,37 @@ if portal_mode == "teacher" or teacher_param:
                         else:
                             st.error(f"❌ {msg}")
 
+    # Compute Shared Board Room Codes across Master Schedule (students sharing Day + Time + Teacher + Meeting Link get the SAME board code!)
+    schedule_slot_map = build_schedule_board_slots(df_teacher_master, teacher_name)
+
+    def get_slot_board_info(c_day, c_time, c_link, fallback_student, c_subj):
+        key = (
+            str(c_day).strip().lower(),
+            str(c_time).strip().lower(),
+            utils.normalize_name(teacher_name),
+            str(c_link).strip().lower(),
+        )
+        info = schedule_slot_map.get(key)
+        if info:
+            room_code = info["room_code"]
+            slot_students = info["students"]
+            is_shared = info["is_shared"]
+        else:
+            room_code = get_student_room_code(fallback_student, teacher_name)
+            slot_students = [fallback_student]
+            is_shared = False
+        roster_str = ", ".join(slot_students)
+        board_title_arg = f"{c_subj} - {roster_str}"
+        board_url = get_pas_board_link(
+            room_code,
+            "tutor",
+            teacher_name,
+            board_title_arg,
+            students=roster_str,
+            subject=c_subj,
+        )
+        return room_code, board_url, slot_students, is_shared
+
     # TAB 0: TODAY'S CLASSES (DEFAULT VIEW)
     with portal_tab0:
         st.subheader(f"📅 Today's Class Schedule ({today_display})")
@@ -497,15 +584,20 @@ if portal_mode == "teacher" or teacher_param:
             st.info(f"🌴 **No classes scheduled for today ({today_display}).** Enjoy your day, or use the **Weekly Planning** tab to confirm upcoming sessions!")
         else:
             for t_idx, (_, c_row) in enumerate(df_teacher_today.iterrows()):
+                c_day_val = c_row.get("Day") or today_day_name
                 c_subj = c_row.get("Subject", "Class")
                 c_st = c_row.get("Student", "Student")
                 c_time = c_row.get("Time", "")
                 c_end = c_row.get("EndTime", "")
                 c_dur = c_row.get("Duration", "")
                 c_link = str(c_row.get("MeetingLink", "")).strip()
-                c_room = get_student_room_code(c_st, teacher_name)
-                c_board_tutor = get_pas_board_link(c_room, "tutor", teacher_name, f"{c_subj} - {c_st}")
-                c_board_student = get_pas_board_link(c_room, "student", c_st, f"{c_subj} - {c_st}")
+                c_room, c_board_tutor, slot_students, is_shared = get_slot_board_info(
+                    c_day_val, c_time, c_link, c_st, c_subj
+                )
+                shared_badge = (
+                    f' &nbsp;<span style="background:#dbeafe; color:#1e40af; padding:2px 8px; border-radius:8px; font-size:11px; font-weight:600;">👥 Shared Class ({", ".join(slot_students)})</span>'
+                    if is_shared else ""
+                )
                 
                 meet_btn_html = ""
                 if c_link and (c_link.startswith("http://") or c_link.startswith("https://")):
@@ -519,9 +611,9 @@ if portal_mode == "teacher" or teacher_param:
                 <div style="background: white; border-left: 5px solid #2563eb; border-radius: 10px; padding: 18px 22px; margin-bottom: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.06); border-top: 1px solid #f1f5f9; border-right: 1px solid #f1f5f9; border-bottom: 1px solid #f1f5f9;">
                     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
                         <div>
-                            <span style="background: #2563eb; color: white; padding: 3px 12px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase;">⏳ Scheduled Today</span>
+                            <span style="background: #2563eb; color: white; padding: 3px 12px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase;">⏳ Scheduled Today</span>{shared_badge}
                             <h3 style="margin: 6px 0 6px 0; color: #0f172a; font-size: 19px; font-weight: 700;">{c_subj} with {c_st}</h3>
-                            <p style="margin: 0; color: #475569; font-size: 14px;">⏰ Time: <strong>{c_time} - {c_end}</strong> ({c_dur}) &nbsp;•&nbsp; 🎨 Board Room: <code>{c_room}</code></p>
+                            <p style="margin: 0; color: #475569; font-size: 14px;">⏰ Time: <strong>{c_time} - {c_end}</strong> ({c_dur}) &nbsp;•&nbsp; 🎨 Board Code: <code>{c_room}</code></p>
                         </div>
                         <div style="margin-top: 8px; text-align: right;">
                             {meet_btn_html}
@@ -701,23 +793,32 @@ if portal_mode == "teacher" or teacher_param:
                 c_end = c_row.get("EndTime", "")
                 c_dur = c_row.get("Duration", "")
                 c_link = str(c_row.get("MeetingLink", "")).strip()
+                c_room, c_board_tutor, slot_students, is_shared = get_slot_board_info(
+                    c_day, c_time, c_link, c_st, c_subj
+                )
+                shared_tag = (
+                    f' &nbsp;<span style="background:#dbeafe; color:#1e40af; padding:2px 8px; border-radius:8px; font-size:11px; font-weight:600;">👥 Shared Group: {", ".join(slot_students)}</span>'
+                    if is_shared else ""
+                )
                 
                 meet_btn_html = ""
                 if c_link and (c_link.startswith("http://") or c_link.startswith("https://")):
-                    meet_btn_html = f'<a href="{c_link}" target="_blank" style="display: inline-block; background: #2563eb; color: white; text-decoration: none; padding: 7px 14px; border-radius: 6px; font-weight: 600; font-size: 12px;">👉 Join Meeting Room</a>'
+                    meet_btn_html = f'<a href="{c_link}" target="_blank" style="display: inline-block; background: #2563eb; color: white; text-decoration: none; padding: 7px 14px; border-radius: 6px; font-weight: 600; font-size: 12px; margin-right: 6px;">👉 Join Meeting Room</a>'
                 else:
-                    meet_btn_html = '<span style="color: #94a3b8; font-size: 12px;">No link attached</span>'
+                    meet_btn_html = '<span style="color: #94a3b8; font-size: 12px; margin-right: 8px;">No link attached</span>'
+                board_btn_html = f'<a href="{c_board_tutor}" target="_blank" style="display: inline-block; background: #0f172a; color: #2dd4bf; border: 1px solid #14b8a6; text-decoration: none; padding: 6px 12px; border-radius: 6px; font-weight: 700; font-size: 12px;">✏️ Whiteboard Code: {c_room} ↗</a>'
                     
                 st.markdown(f"""
                 <div style="background: white; border-left: 4px solid #3b82f6; border-radius: 8px; padding: 14px 18px; margin-bottom: 8px; box-shadow: 0 1px 6px rgba(0,0,0,0.04); border-top: 1px solid #f1f5f9; border-right: 1px solid #f1f5f9; border-bottom: 1px solid #f1f5f9;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
                         <div>
-                            <span style="background: #f1f5f9; color: #334155; padding: 2px 10px; border-radius: 8px; font-size: 11px; font-weight: 700;">{c_day}</span>
+                            <span style="background: #f1f5f9; color: #334155; padding: 2px 10px; border-radius: 8px; font-size: 11px; font-weight: 700;">{c_day}</span>{shared_tag}
                             <h4 style="margin: 6px 0 4px 0; color: #0f172a; font-size: 16px; font-weight: 600;">{c_subj} with {c_st}</h4>
-                            <p style="margin: 0; color: #64748b; font-size: 13px;">⏰ {c_time} - {c_end} ({c_dur})</p>
+                            <p style="margin: 0; color: #64748b; font-size: 13px;">⏰ {c_time} - {c_end} ({c_dur}) &nbsp;•&nbsp; 🎨 Board Code: <code>{c_room}</code></p>
                         </div>
                         <div style="margin-top: 6px; text-align: right;">
                             {meet_btn_html}
+                            {board_btn_html}
                         </div>
                     </div>
                 </div>
